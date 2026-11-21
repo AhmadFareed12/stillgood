@@ -43,10 +43,18 @@ This toolkit is for that team.
 
 ## Quick start
 
-Requirements: Windows 10 version 2004 or later, or Windows 11, on 64-bit x64; Windows PowerShell 5.1, which is built into Windows. Report runs without administrator rights. Everything that changes the PC needs them.
+Requirements: Windows 10 version 2004 or later, or Windows 11, on 64-bit x64; Windows PowerShell 5.1, which is built into Windows.
+
+**On one PC:** download the zip, extract the whole folder, and double-click **`StillGood.cmd`**. Windows asks once for administrator rights, then the StillGood window opens. It checks the PC straight away; nothing changes until you confirm.
+
+![The StillGood window on a lab PC](docs/window.png)
+
+The left column lists the actions. In the middle you see the PC, its Windows 11 verdict, and the groups of apps Clean apps would remove; untick a group to keep it, and the list on the right shows exactly what will go. The log at the bottom shows what StillGood is doing. The upgrade is watched in a small window of its own, which you can leave open after closing the main one.
+
+**From a script, a terminal or an RMM tool:**
 
 ```powershell
-# The menu
+# The text menu
 powershell -ExecutionPolicy Bypass -File .\StillGood.ps1
 
 # A read-only report (opens nothing, changes nothing)
@@ -87,8 +95,11 @@ powershell -ExecutionPolicy Bypass -File .\StillGood.ps1 -Mode CleanApps -Profil
 ## How it is built
 
 ```
-StillGood.ps1          menu and command line
+StillGood.cmd          double-click: opens the window (asks for administrator rights)
+StillGood.ps1          the window, the text menu and the command line
 modules/
+  Gui.psm1             the window (WinForms)
+  GuiCore.psm1         the window's logic: app groups, the trimmed plan, the background runner
   Guard.psm1           the safety rules (protected apps, allowed registry settings)
   System.psm1          every call that changes the PC, behind one swappable table
   Inventory.psm1       read-only: apps, apps for new users, programs, startup items
@@ -125,7 +136,10 @@ The tests run against a fake PC: fake apps, users, registry, Setup and scheduled
 - SHA-256;
 - stalled downloads and the drop folder;
 - the full upgrade job, the after-upgrade check, rollback detection;
+- the window's logic (app groups, unticked groups kept, the background runner and its live log);
 - ASCII-only source files.
+
+The window itself is tested by hand on a lab VM: it is opened with `StillGood.cmd` in a signed-in session, a real mouse unticks a group and clicks through the dialogs, and the VM's screen is captured at every step.
 
 ## Status
 

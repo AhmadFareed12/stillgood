@@ -45,6 +45,13 @@ function New-TkRun {
 
 function Get-TkRun { return $script:Run }
 
+$script:LogSink = $null
+function Set-TkLogSink {
+    # The window passes a scriptblock here to receive every log line as it is written.
+    param([scriptblock]$Sink)
+    $script:LogSink = $Sink
+}
+
 function Write-TkLog {
     param([string]$Message, [ValidateSet('Info', 'Warn', 'Error', 'Ok')][string]$Level = 'Info', [hashtable]$Data)
     $ts = (Get-Date).ToString('s')
@@ -54,6 +61,7 @@ function Write-TkLog {
         if ($Level -eq 'Warn') { $color = 'Yellow' } elseif ($Level -eq 'Error') { $color = 'Red' } elseif ($Level -eq 'Ok') { $color = 'Green' }
         Write-Host $line -ForegroundColor $color
     }
+    if ($script:LogSink) { try { & $script:LogSink $line } catch { } }
     if ($script:Run) {
         Add-Content -LiteralPath $script:Run.Log -Value $line -Encoding UTF8
         $evt = [ordered]@{ ts = $ts; level = $Level; message = $Message }

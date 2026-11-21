@@ -21,7 +21,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Menu', 'Report', 'CleanApps', 'Upgrade', 'UpgradeAndClean', 'Monitor', 'Undo')][string]$Mode = 'Menu',
+    [ValidateSet('Window', 'Menu', 'Report', 'CleanApps', 'Upgrade', 'UpgradeAndClean', 'Monitor', 'Undo')][string]$Mode = 'Menu',
     [Alias('Profile')][ValidateSet('office', 'kiosk')][string]$ProfileName = 'office',
     [switch]$Apply,
     [switch]$Yes,
@@ -173,6 +173,23 @@ function Show-TkMenu {
 
 try {
     switch ($Mode) {
+        'Window' {
+            # The window (what StillGood.cmd opens). It asks Windows for administrator rights first.
+            if (-not (Test-TkElevated)) {
+                $ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+                $argLine = "-NoLogo -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File `"$PSCommandPath`" -Mode Window -Profile $ProfileName"
+                try { Start-Process -FilePath $ps -ArgumentList $argLine -Verb RunAs -WindowStyle Hidden | Out-Null }
+                catch {
+                    Add-Type -AssemblyName System.Windows.Forms
+                    [void][System.Windows.Forms.MessageBox]::Show('StillGood needs administrator rights to check and clean apps for every user. Open it again and choose Yes when Windows asks.', 'StillGood', 'OK', 'Information')
+                }
+                exit 0
+            }
+            Import-Module (Join-Path $PSScriptRoot 'modules\GuiCore.psm1') -Force -DisableNameChecking -Global
+            Import-Module (Join-Path $PSScriptRoot 'modules\Gui.psm1') -Force -DisableNameChecking -Global
+            Show-TkWindow -Root $PSScriptRoot -Profile $ProfileName -OrgPath (Get-TkOrgPath)
+            exit 0
+        }
         'Menu' {
             if (-not (Test-TkInteractive)) { Write-Host '  No keyboard here: choose a -Mode (see Get-Help .\StillGood.ps1).'; exit 2 }
             Show-TkMenu; exit 0

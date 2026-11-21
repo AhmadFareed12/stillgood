@@ -380,6 +380,37 @@ It 'hands the upgrade to a background task, once' {
     Should-Throw { Start-TkUpgrade -Config $cfg } '*already in progress*'
 }
 
+Write-Host ''; Write-Host 'The window' -ForegroundColor Cyan
+Import-Module (Join-Path $root 'modules\GuiCore.psm1') -Force -DisableNameChecking -Global
+It 'groups the plan for the window, and an unticked group is kept' {
+    Reset-TkKeepPatterns
+    $plan = New-TkCleanPlan -Inventory (New-StandardPc) -Catalog $catalog -Profile 'office'
+    $groups = @(Get-TkPlanGroups -Plan $plan)
+    Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'gaming' }).Count) 'an Xbox and games group'
+    Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'ai' -and $_.Block -ge 1 }).Count) 'Copilot shows as blocked ahead'
+    $trim = Select-TkPlanGroups -Plan $plan -Unticked @('gaming')
+    Should-Be (Get-PlanItem $trim 'Microsoft.GamingApp').Action 'Keep' 'unticked group kept'
+    Should-Be (Get-PlanItem $trim 'Microsoft.BingNews').Action 'Remove' 'other groups still removed'
+    Should-Be (Get-PlanItem $plan 'Microsoft.GamingApp').Action 'Remove' 'the original plan is untouched'
+    Should-Be $trim.Counts.Remove ($plan.Counts.Remove - 1) 'counts follow the trim'
+}
+It 'runs work in the background and streams its log' {
+    $sync = New-TkSync
+    $job = Start-TkBackground -Root $root -Body { param($a) Write-TkLog "hello $($a.Name)"; 40 + 2 }.ToString() -Arguments @{ Name = 'window' } -Sync $sync
+    $deadline = (Get-Date).AddSeconds(60)
+    while (-not $job.Handle.IsCompleted -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    Complete-TkBackground $job
+    Should-Be $sync.Error $null 'no error'
+    Should-Be $sync.Result 42 'result'
+    $lines = @(); $l = $null; while ($sync.Log.TryDequeue([ref]$l)) { $lines += $l }
+    Should-BeTrue (@($lines | Where-Object { $_ -like '*hello window*' }).Count) 'log line streamed'
+}
+It 'loads the window module without opening anything' {
+    Import-Module (Join-Path $root 'modules\Gui.psm1') -Force -DisableNameChecking -Global
+    Should-BeTrue ([bool](Get-Command Show-TkWindow -ErrorAction SilentlyContinue)) 'Show-TkWindow'
+    Should-Be (Get-TkStageName 'WaitingForImage') 'Waiting for the image' 'stage names for the monitor'
+}
+
 Write-Host ''; Write-Host 'Source files' -ForegroundColor Cyan
 It 'keeps every script ASCII-only (Windows PowerShell 5.1 reads files without a BOM as ANSI)' {
     foreach ($f in @(Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object { @('.ps1', '.psm1', '.json') -contains $_.Extension })) {
