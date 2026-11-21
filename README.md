@@ -129,15 +129,26 @@ The tests run against a fake PC: fake apps, users, registry, Setup and scheduled
 
 ## Status
 
-**v0.3, preview.** All three blocks are built and the offline tests pass. The read-only report has run on a real Windows 11 PC. The integration test (`tests/Integration-Test.ps1`) passes inside Windows Sandbox on real Windows. It covers Clean apps with the kiosk profile, the stay-clean settings for a signed-out user and for new users, the blocks, a second run that changes nothing, and Undo putting every value back. Windows Sandbox ships without consumer apps, so app removal itself still needs a full Windows VM. Before any release, each item below must pass on disposable virtual machines with checkpoints:
+**v0.3, preview.** All three blocks are built. Report and Clean apps are lab-proven. The Upgrade is built and its Setup command line is proven, but the full upgrade has not run in the lab yet, so treat it as experimental.
 
-1. Clean apps, both profiles, on Windows 10 22H2 and Windows 11. Then sign in as a new user and run Windows Update and a feature update: nothing returns.
-2. The "blocked before they arrive" markers stop Copilot, Outlook and Teams from arriving with a Windows 10 to 11 upgrade.
-3. The upgrade on a VM with TPM 2.0 and on one without (unsupported option): download, stall and drop folder, scan exit codes, sign-out during Setup, restart, the after-upgrade cleanup, a forced rollback.
-4. Undo restores every setting, and reinstall brings the apps back.
-5. The current Windows 11 image's Setup accepts every switch used (`/eula accept`, `/product server`).
+**Proven in the lab (2026-11-22):**
+- **40 offline tests** against a fake PC (`tests/Run-Tests.ps1`).
+- **Windows Sandbox**, real Windows (`tests/Integration-Test.ps1`): 11 of 11 checks. These cover the stay-clean settings for a signed-out user and new users, the blocks, a second run that changes nothing, and Undo putting every value back.
+- **A fresh Windows 11 26H2 Pro VM**, Hyper-V with a virtual TPM. Clean apps ran as SYSTEM with a user signed in, the way an RMM tool runs it, and passed 12 of 12 checks with the kiosk profile:
+  - 31 apps removed for every user and new users, and the run log shows no removal outside the plan;
+  - all 75 kept and protected apps untouched;
+  - the settings applied for the signed-in user, new users and the machine;
+  - Copilot blocked before it arrives;
+  - a second run changes nothing, and Undo restores every setting.
+- **Before and after on the same VM, office profile:** 16 apps removed and 18 blocked from coming back. Memory in use a minute after boot fell from 2,152 MB to 1,966 MB, and processes from 130 to 127. Boot time did not change (Windows' own measurement, one run each). On a new PC, StillGood buys control, not speed.
+- **Today's Windows 11 Setup accepts StillGood's exact command line,** including `/eula accept` and `/product server`. Both compatibility scans returned `0xC1900210` (no issues).
 
-v1.0 adds code signing, and pilot evidence from real PCs before any fleet claims.
+**Still to prove before v1.0:**
+1. The full upgrade from Windows 10 22H2, on a VM with TPM 2.0 and on one without (unsupported option): download, stall and drop folder, sign-out during Setup, restart, the after-upgrade cleanup, a forced rollback.
+2. The "blocked before they arrive" markers stop Copilot, Outlook and Teams from arriving with that upgrade.
+3. A new user signs in after cleaning, Windows Update and a feature update run, and nothing returns.
+4. Reinstalling removed apps from the Store (needs a networked VM).
+5. Code signing, and pilot evidence from real PCs before any fleet claims.
 
 ## License
 

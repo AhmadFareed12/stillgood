@@ -39,6 +39,17 @@ function Get-TkCpuSupport {
     return [pscustomobject]@{ Status = 'Unknown'; Generation = 'not recognised' }
 }
 
+function Get-TkSystemDiskBytes {
+    # The physical disk that holds the Windows volume (no admin rights needed). Falls back to the volume itself.
+    param($Volume)
+    try {
+        $part = Get-CimAssociatedInstance -InputObject $Volume -ResultClassName Win32_DiskPartition -ErrorAction Stop | Select-Object -First 1
+        $drive = Get-CimAssociatedInstance -InputObject $part -ResultClassName Win32_DiskDrive -ErrorAction Stop | Select-Object -First 1
+        if ($drive -and $drive.Size) { return [double]$drive.Size }
+    } catch { }
+    return [double]$Volume.Size
+}
+
 function Get-TkVerdict {
     # Pure function: turns the checks into one verdict.
     param([object[]]$Checks)
@@ -82,9 +93,12 @@ function Get-TkWin11Readiness {
     [void]$checks.Add((New-TkCheck 'Memory' '4 GB' "$ramGb GB" $s $false 'Below 4 GB, Windows 11 is not usable.'))
 
     $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($env:SystemDrive)'"
-    $sizeGb = [math]::Round($disk.Size / 1GB); $freeGb = [math]::Round($disk.FreeSpace / 1GB)
-    $s = 'Fail'; if ($sizeGb -ge 64) { $s = 'Pass' }
-    [void]$checks.Add((New-TkCheck 'System disk size' '64 GB' "$sizeGb GB" $s $true 'Part of Microsoft''s hardware check.'))
+    $freeGb = [math]::Round($disk.FreeSpace / 1GB)
+    # Microsoft's requirement is the storage device ("64 GB" as printed on it), not the Windows partition, which is
+    # always a little smaller. A 63 GB floor allows for disks that report a few hundred MB under their label.
+    $devBytes = Get-TkSystemDiskBytes -Volume $disk
+    $s = 'Fail'; if ($devBytes -ge 63e9) { $s = 'Pass' }
+    [void]$checks.Add((New-TkCheck 'Storage device size' '64 GB' ('{0} GB' -f [math]::Round($devBytes / 1e9)) $s $true 'Part of Microsoft''s hardware check: the whole disk, not the Windows partition.'))
     $s = 'Fail'; if ($freeGb -ge 30) { $s = 'Pass' }
     [void]$checks.Add((New-TkCheck 'Free space for the upgrade' '30 GB' "$freeGb GB" $s $false 'Setup needs room for the image, the new Windows and the old one until it is removed.' $true))
 
