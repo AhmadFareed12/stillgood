@@ -1,0 +1,4 @@
+# Each admin's own settings stay out of the repo (the *.example.json files are the templates).
+config/upgrade.json
+catalog/organization.json
+*.log

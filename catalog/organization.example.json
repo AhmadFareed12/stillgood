@@ -1,0 +1,11 @@
+{
+  "about": "Copy this file to organization.json and edit it. 'keep' protects apps on every PC: your own software and anything you never want removed (wildcards allowed). It can only add protection. 'alsoRemove' removes extra apps for one profile, and it can only name apps that are in the catalog.",
+  "keep": [
+    "Contoso.*",
+    "Microsoft.WindowsCalculator"
+  ],
+  "alsoRemove": {
+    "office": ["Microsoft.OutlookForWindows"],
+    "kiosk": []
+  }
+}
