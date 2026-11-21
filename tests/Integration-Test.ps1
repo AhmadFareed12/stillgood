@@ -1,7 +1,8 @@
-# Sandbox-Test.ps1 - the real-Windows test. Runs as SYSTEM inside a disposable Windows Sandbox, started by
-#   C:\Products\lab\Invoke-SandboxTest.ps1 -ToolPath <this toolkit> -TestScript tests\Sandbox-Test.ps1
-# It removes apps for real (kiosk profile), checks the result, runs again, then undoes the settings.
-# It refuses to run anywhere but Windows Sandbox.
+# Integration-Test.ps1 - the real-Windows test. It removes apps for real (kiosk profile), checks the result, runs again,
+# then undoes the settings. It runs only on a throwaway machine:
+#   - Windows Sandbox (as SYSTEM):  lab\Invoke-SandboxTest.ps1 -ToolPath <this toolkit> -TestScript tests\Integration-Test.ps1
+#   - a lab VM marked C:\Lab.marker (as its signed-in admin):  lab\Invoke-LabTest.ps1 -Vm <vm> -ToolPath ... -TestScript ...
+# Anywhere else it refuses.
 param([Parameter(Mandatory = $true)][string]$ResultsDir)
 $ErrorActionPreference = 'Continue'
 $steps = New-Object System.Collections.ArrayList
@@ -20,7 +21,9 @@ function Finish {
     exit 0
 }
 
-if (-not (Test-Path 'C:\Users\WDAGUtilityAccount')) { Step 'sandbox check' $false 'Not inside Windows Sandbox - refused.'; Finish }
+$inSandbox = Test-Path 'C:\Users\WDAGUtilityAccount'
+if (-not $inSandbox -and -not (Test-Path 'C:\Lab.marker')) { Step 'throwaway machine check' $false 'Not Windows Sandbox and not a lab VM - refused.'; Finish }
+$userName = 'lab'; if ($inSandbox) { $userName = 'WDAGUtilityAccount' }
 Start-Transcript -LiteralPath (Join-Path $ResultsDir 'transcript.txt') | Out-Null
 
 $ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -39,19 +42,21 @@ function Invoke-Tk {
 }
 function Get-LatestRun { param([string]$Like) return (Get-ChildItem -LiteralPath $runs -Directory | Where-Object { $_.Name -like $Like } | Sort-Object Name | Select-Object -Last 1) }
 function Get-State {
+    $all = @(Get-AppxPackage -AllUsers)
     return [pscustomobject]@{
-        Appx = @(Get-AppxPackage -AllUsers | ForEach-Object { $_.Name } | Sort-Object -Unique)
+        Appx = @($all | ForEach-Object { $_.Name } | Sort-Object -Unique)
+        Frameworks = @($all | Where-Object { $_.IsFramework } | ForEach-Object { $_.Name } | Sort-Object -Unique)
         Provisioned = @(Get-AppxProvisionedPackage -Online | ForEach-Object { $_.DisplayName } | Sort-Object -Unique)
     }
 }
-$sid = (Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' | Where-Object { (Get-ItemProperty $_.PSPath).ProfileImagePath -like '*WDAGUtilityAccount' } | Select-Object -First 1).PSChildName
+$sid = (Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' | Where-Object { (Get-ItemProperty $_.PSPath).ProfileImagePath -like "*\$userName" } | Select-Object -First 1).PSChildName
 $cdm = "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
 $deprov = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned\Microsoft.Copilot_8wekyb3d8bbwe'
 function Get-RegSnap {
     # The sandbox user may be signed in (hive open under HKU) or not (hive only in NTUSER.DAT): read whichever is true.
     $root = "Registry::HKEY_USERS\$sid"; $mounted = $false
     if (-not (Test-Path -LiteralPath $root)) {
-        $null = & reg.exe load 'HKU\SBXUSER' 'C:\Users\WDAGUtilityAccount\NTUSER.DAT' 2>&1
+        $null = & reg.exe load 'HKU\SBXUSER' "C:\Users\$userName\NTUSER.DAT" 2>&1
         $root = 'Registry::HKEY_USERS\SBXUSER'; $mounted = $true
     }
     $key = "$root\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
@@ -113,8 +118,18 @@ try {
     $detail = "exit {0}; removed {1} of {2}" -f $r.Code, ($toRemove.Count - $left.Count), $toRemove.Count
     if ($left.Count) { $detail += "; still there: $($left -join ', ')" }
     Step 'clean apps (kiosk)' ($r.Code -eq 0 -and -not $left.Count) $detail
-    $lost = @($mustStay | Where-Object { $before.Appx -contains $_ -and $after.Appx -notcontains $_ })
-    Step 'kept, unknown and protected apps untouched' (-not $lost.Count) ($(if ($lost.Count) { "gone: $($lost -join ', ')" } else { "$($mustStay.Count) apps checked" }))
+    # Windows removes a shared runtime by itself once the last app using it is gone: list those, fail on anything else.
+    $vanished = @($mustStay | Where-Object { $before.Appx -contains $_ -and $after.Appx -notcontains $_ })
+    $retired = @($vanished | Where-Object { $before.Frameworks -contains $_ })
+    $lost = @($vanished | Where-Object { $before.Frameworks -notcontains $_ })
+    $detail = "$($mustStay.Count) apps checked"
+    if ($lost.Count) { $detail = "gone: $($lost -join ', ')" }
+    if ($retired.Count) { $detail += "; Windows retired $($retired.Count) runtime(s) no app uses any more: $($retired -join ', ')" }
+    Step 'kept, unknown and protected apps untouched' (-not $lost.Count) $detail
+    # StillGood's own log must show removals of planned apps only.
+    $removedLines = @(Select-String -LiteralPath (Join-Path $run.FullName 'run.log') -Pattern 'Removed (\S+) for ' -CaseSensitive | ForEach-Object { $_.Matches[0].Groups[1].Value })
+    $offPlan = @($removedLines | Where-Object { $toRemove -notcontains ($_ -split '_')[0] })
+    Step 'StillGood removed only what the plan listed' (-not $offPlan.Count) ($(if ($offPlan.Count) { "off plan: $($offPlan -join ', ')" } else { "$($removedLines.Count) removals, all on the plan" }))
     Copy-Item -LiteralPath (Join-Path $run.FullName 'run.log') -Destination (Join-Path $ResultsDir '4-run.log') -ErrorAction SilentlyContinue
     # Diagnostics: every profile Windows knows, every open hive, and where the stay-clean value ended up.
     $diag = New-Object System.Collections.ArrayList

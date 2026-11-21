@@ -31,6 +31,8 @@ This toolkit is for that team.
 - **Everything logged, everything undoable, safe to run again.** Each run writes a readable log, a machine log, the plan, the result and an undo file. A second run acts only on what is still there.
 - **Lab before release.** See *Status* below.
 
+**Good to know.** When the last app that uses a shared runtime (the Windows App Runtime, for example) is removed, Windows removes that runtime by itself. StillGood never removes runtimes; they come back automatically with any app that needs them. On Windows 11 24H2 and later, removing an app for every user also removes it for new users, and StillGood checks again before its second step instead of reporting an error.
+
 ## What it will not do
 
 - Touch licensing or activation.
@@ -127,7 +129,7 @@ The tests run against a fake PC: fake apps, users, registry, Setup and scheduled
 
 ## Status
 
-**v0.3, preview.** All three blocks are built and the offline tests pass. The read-only report has run on a real Windows 11 PC. The integration test (`tests/Sandbox-Test.ps1`) passes inside Windows Sandbox on real Windows. It covers Clean apps with the kiosk profile, the stay-clean settings for a signed-out user and for new users, the blocks, a second run that changes nothing, and Undo putting every value back. Windows Sandbox ships without consumer apps, so app removal itself still needs a full Windows VM. Before any release, each item below must pass on disposable virtual machines with checkpoints:
+**v0.3, preview.** All three blocks are built and the offline tests pass. The read-only report has run on a real Windows 11 PC. The integration test (`tests/Integration-Test.ps1`) passes inside Windows Sandbox on real Windows. It covers Clean apps with the kiosk profile, the stay-clean settings for a signed-out user and for new users, the blocks, a second run that changes nothing, and Undo putting every value back. Windows Sandbox ships without consumer apps, so app removal itself still needs a full Windows VM. Before any release, each item below must pass on disposable virtual machines with checkpoints:
 
 1. Clean apps, both profiles, on Windows 10 22H2 and Windows 11. Then sign in as a new user and run Windows Update and a feature update: nothing returns.
 2. The "blocked before they arrive" markers stop Copilot, Outlook and Teams from arriving with a Windows 10 to 11 upgrade.

@@ -193,6 +193,15 @@ It 'keeps going when one removal fails, and says so' {
     Should-BeTrue (@($res.StillPresent) -contains 'Microsoft.GamingApp') 'Xbox reported as still present'
     Should-BeTrue (Test-Called 'RemoveAppx Microsoft.BingNews_*') 'the rest still ran'
 }
+It 'does not count it as an error when Windows already removed the new-user copy (24H2 and later)' {
+    $inv = New-StandardPc
+    $global:Fake.AllUsersRemovesProvisioned = $true
+    $res = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office') -Apply
+    Should-Be $res.Failed 0 'items with errors'
+    Should-BeFalse (Test-Called 'RemoveProvisioned Microsoft.BingNews_*') 'no second removal for an app already gone'
+    Should-BeTrue (Test-Called 'RemoveProvisioned Clipchamp.Clipchamp_*') 'apps only set up for new users are still removed'
+    Should-Be @($res.StillPresent).Count 0 'left over'
+}
 It 'refuses a forged plan at the last moment' {
     Install-FakeSystem -Appx @((New-FakePkg 'Microsoft.DesktopAppInstaller'), (New-FakePkg 'Microsoft.BingNews' -NonRemovable))
     $forged = [pscustomobject]@{ Profile = 'office'; Settings = @(); Items = @(

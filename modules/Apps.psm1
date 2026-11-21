@@ -32,9 +32,15 @@ function Invoke-TkCleanApps {
                 try { Invoke-TkSys 'RemoveAppx' @($pkg.PackageFullName); $r.Removed++; Write-TkLog "Removed $($pkg.PackageFullName) for every user" 'Ok' }
                 catch { $r.Failed++; $r.Errors += "$($pkg.PackageFullName): $($_.Exception.Message)"; Write-TkLog "Could not remove $($pkg.PackageFullName): $($_.Exception.Message)" 'Warn' }
             }
+            # Windows 11 24H2 and later remove the new-user copy together with the all-users removal: look again first.
+            if ($live.Count) { $prov = @(Invoke-TkSys 'FindProvisioned' @($item.Name)) }
             foreach ($pv in $prov) {
                 try { Invoke-TkSys 'RemoveProvisioned' @($pv.PackageName); $r.Removed++; Write-TkLog "Removed $($pv.PackageName) for new users" 'Ok' }
-                catch { $r.Failed++; $r.Errors += "$($pv.PackageName): $($_.Exception.Message)"; Write-TkLog "Could not remove $($pv.PackageName) for new users: $($_.Exception.Message)" 'Warn' }
+                catch {
+                    $still = @(Invoke-TkSys 'FindProvisioned' @($item.Name) | Where-Object { $_.PackageName -eq $pv.PackageName })
+                    if ($still.Count) { $r.Failed++; $r.Errors += "$($pv.PackageName): $($_.Exception.Message)"; Write-TkLog "Could not remove $($pv.PackageName) for new users: $($_.Exception.Message)" 'Warn' }
+                    else { Write-TkLog "$($pv.PackageName) was already gone for new users" }
+                }
             }
         }
         # Mark the family so new users and feature updates do not bring it back.

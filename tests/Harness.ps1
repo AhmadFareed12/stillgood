@@ -70,7 +70,7 @@ function Install-FakeSystem {
         Appx = (New-List $Appx); Prov = (New-List $Prov); Reg = @{}; Keys = @{}
         Profiles = @($Profiles); Loaded = (New-List $Loaded); Files = @{}; Calls = (New-List @())
         FailRemove = @($FailRemove); Os = (New-FakeOs); ExitCodes = (New-List @()); LastBoot = [datetime]'2026-11-01T08:00:00'
-        SetupCpu = $null; Now = [datetime]'2026-11-21T10:00:00'
+        SetupCpu = $null; Now = [datetime]'2026-11-21T10:00:00'; AllUsersRemovesProvisioned = $false
         Download = { param($Source, $Destination, $OnProgress) [pscustomobject]@{ Ok = $false; Stalled = $true; Error = 'fake stall' } }
     }
     foreach ($p in @($Profiles)) { $global:Fake.Files[(Join-Path $p.Path 'NTUSER.DAT')] = $true }
@@ -83,7 +83,11 @@ function Install-FakeSystem {
             param($FullName)
             [void]$global:Fake.Calls.Add("RemoveAppx $FullName")
             if ($global:Fake.FailRemove -contains $FullName) { throw 'Removal failed (fake)' }
-            foreach ($i in @($global:Fake.Appx | Where-Object { $_.PackageFullName -eq $FullName })) { $global:Fake.Appx.Remove($i) }
+            foreach ($i in @($global:Fake.Appx | Where-Object { $_.PackageFullName -eq $FullName })) {
+                $global:Fake.Appx.Remove($i)
+                # Windows 11 24H2+: removing for all users also removes the new-user copy.
+                if ($global:Fake.AllUsersRemovesProvisioned) { foreach ($p in @($global:Fake.Prov | Where-Object { $_.DisplayName -eq $i.Name })) { $global:Fake.Prov.Remove($p) } }
+            }
         }
         FindProvisioned   = { param($Name) @($global:Fake.Prov | Where-Object { $_.DisplayName -eq $Name }) }
         RemoveProvisioned = {
