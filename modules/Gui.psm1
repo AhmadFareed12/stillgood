@@ -17,6 +17,51 @@ function New-TkCtl {
     return $c
 }
 
+function Measure-TkText {
+    # Height a text needs when it wraps at this width.
+    param([string]$Text, $Font, [int]$Width)
+    $flags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::TextBoxControl
+    return [System.Windows.Forms.TextRenderer]::MeasureText($Text, $Font, (New-Object System.Drawing.Size([Math]::Max(10, $Width), 0)), $flags).Height
+}
+
+function Set-TkUiGroupRows {
+    # Each app group's check box as wide as the list and as tall as its text needs: long names wrap, never cut.
+    $ui = $script:Ui; $s = $ui.Scale
+    $w = $ui.Groups.ClientSize.Width - [int](22 * $s)
+    foreach ($c in @($ui.Groups.Controls)) {
+        $one = Measure-TkText 'Ag' $c.Font 1000
+        $th = Measure-TkText $c.Text $c.Font ($w - [int](24 * $s))
+        if ($c -is [System.Windows.Forms.CheckBox]) {
+            if ($th -gt $one + 2) { $c.CheckAlign = 'TopLeft'; $c.TextAlign = 'TopLeft' } else { $c.CheckAlign = 'MiddleLeft'; $c.TextAlign = 'MiddleLeft' }
+        }
+        $c.Size = New-Object System.Drawing.Size($w, [Math]::Max([int](26 * $s), $th + [int](8 * $s)))
+    }
+}
+
+function Set-TkUiLayout {
+    # Lays out the middle of the window for its actual size, from measured text: an old PC's small screen, a large
+    # one, 100 to 200 percent display scaling and long texts all fit without cutting anything off.
+    $ui = $script:Ui
+    if (-not $ui.List -or -not $ui.Main) { return }
+    $s = $ui.Scale; $pad = [int](16 * $s); $gap = [int](20 * $s)
+    $W = $ui.Main.ClientSize.Width; $H = $ui.Main.ClientSize.Height
+    $inner = [Math]::Max([int](300 * $s), $W - 2 * $pad)
+    $ui.Info.SetBounds($pad, [int](12 * $s), $inner, [int](22 * $s))
+    $vh = Measure-TkText $ui.Verdict.Text $ui.Verdict.Font ($inner - [int](20 * $s))
+    $ui.Verdict.SetBounds($pad, $ui.Info.Bottom + [int](6 * $s), $inner, [Math]::Max([int](34 * $s), $vh + [int](12 * $s)))
+    $col = [int](($inner - $gap) * 0.52)
+    $top = $ui.Verdict.Bottom + [int](14 * $s)
+    $ui.GroupsTitle.SetBounds($pad, $top, $col, (Measure-TkText $ui.GroupsTitle.Text $ui.GroupsTitle.Font $col) + [int](2 * $s))
+    $nh = Measure-TkText $ui.Never.Text $ui.Never.Font $col
+    $ui.Never.SetBounds($pad, $H - $nh - [int](8 * $s), $col, $nh)
+    $gy = $ui.GroupsTitle.Bottom + [int](4 * $s)
+    $ui.Groups.SetBounds($pad, $gy, $col, [Math]::Max([int](60 * $s), $ui.Never.Top - $gy - [int](6 * $s)))
+    Set-TkUiGroupRows
+    $x2 = $pad + $col + $gap; $w2 = $inner - $col - $gap
+    $ui.ListTitle.SetBounds($x2, $top, $w2, $ui.GroupsTitle.Height)
+    $ui.List.SetBounds($x2, $gy, $w2, [Math]::Max([int](60 * $s), $H - $gy - [int](8 * $s)))
+}
+
 function Show-TkUiInfo { param([string]$Text) [void][System.Windows.Forms.MessageBox]::Show($script:Ui.Form, $Text, 'StillGood', 'OK', 'Information') }
 function Show-TkUiError { param([string]$Text) [void][System.Windows.Forms.MessageBox]::Show($script:Ui.Form, $Text, 'StillGood', 'OK', 'Warning') }
 function Confirm-TkUi {
@@ -81,11 +126,12 @@ function Update-TkUiScan {
     $os = $s.Os
     $adm = 'yes'; if (-not $s.Elevated) { $adm = 'no (some checks could not be read)' }
     $ui.Info.Text = "$env:COMPUTERNAME  -  $($os.Caption) $($os.DisplayVersion) (build $($os.Build).$($os.Ubr))  -  administrator: $adm"
+    $ui.Tips.SetToolTip($ui.Info, $ui.Info.Text)
     $v = $s.Readiness.Verdict
     $colors = @{ Supported = @(227, 244, 230, 20, 92, 38); ProbablySupported = @(227, 244, 230, 20, 92, 38); UnsupportedButUpgradeable = @(255, 243, 214, 122, 75, 0); FixFirst = @(255, 243, 214, 122, 75, 0); NotUpgradeable = @(253, 227, 225, 138, 28, 18) }
     $c = $colors[$v]
     $ui.Verdict.BackColor = [System.Drawing.Color]::FromArgb($c[0], $c[1], $c[2]); $ui.Verdict.ForeColor = [System.Drawing.Color]::FromArgb($c[3], $c[4], $c[5])
-    $ui.Verdict.Text = "  Windows 11: $($s.Readiness.Summary)"
+    $ui.Verdict.Text = "Windows 11: $($s.Readiness.Summary)"
     $ui.Groups.SuspendLayout(); $ui.Groups.Controls.Clear()
     foreach ($g in @(Get-TkPlanGroups -Plan $s.Plan)) {
         $t = "$($g.Title)  -  $($g.Remove) app$(if ($g.Remove -ne 1) { 's' })"
@@ -100,6 +146,7 @@ function Update-TkUiScan {
     $ui.Groups.ResumeLayout()
     $ui.GroupsTitle.Text = 'What Clean apps removes (untick a group to keep it)'
     $ui.ReportLink.Enabled = $true
+    Set-TkUiLayout
     Update-TkUiList
 }
 
@@ -137,15 +184,16 @@ function Show-TkUpgradeSettings {
     # Asks where the Windows 11 image in this PC's language is, and its SHA-256.
     param([string]$Language, $Current)
     $d = New-Object System.Windows.Forms.Form
-    $d.Text = 'StillGood - the Windows 11 image'; $d.Size = New-Object System.Drawing.Size(640, 330); $d.StartPosition = 'CenterParent'
+    $d.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96); $d.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+    $d.Text = 'StillGood - the Windows 11 image'; $d.Size = New-Object System.Drawing.Size(640, 360); $d.StartPosition = 'CenterParent'
     $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false; $d.Font = $script:Ui.Form.Font
-    $help = New-TkCtl Label "This PC's Windows was installed in $Language, so it needs the $Language image. Download it once from Microsoft's Windows 11 page (Download Windows 11 Disk Image (ISO) for x64 devices); the same page lists its SHA-256 under 'Verify your download'. For many PCs, put it on a share." 16 12 590 60
-    $l1 = New-TkCtl Label 'Image: a file, a share path or a web address' 16 80 400 20
-    $src = New-TkCtl TextBox '' 16 102 480 26
-    $browse = New-TkCtl Button 'Browse...' 504 101 100 28
-    $l2 = New-TkCtl Label "SHA-256 (64 letters and digits, from Microsoft's page)" 16 140 480 20
-    $sha = New-TkCtl TextBox '' 16 162 588 26
-    $ok = New-TkCtl Button 'Save' 404 220 96 32; $cancel = New-TkCtl Button 'Cancel' 508 220 96 32
+    $help = New-TkCtl Label "This PC's Windows was installed in $Language, so it needs the $Language image. Download it once from Microsoft's Windows 11 page (Download Windows 11 Disk Image (ISO) for x64 devices); the same page lists its SHA-256 under 'Verify your download'. For many PCs, put it on a share." 16 12 590 86
+    $l1 = New-TkCtl Label 'Image: a file, a share path or a web address' 16 106 480 20
+    $src = New-TkCtl TextBox '' 16 128 480 26
+    $browse = New-TkCtl Button 'Browse...' 504 127 100 28
+    $l2 = New-TkCtl Label "SHA-256 (64 letters and digits, from Microsoft's page)" 16 166 480 20
+    $sha = New-TkCtl TextBox '' 16 188 588 26
+    $ok = New-TkCtl Button 'Save' 404 246 96 32; $cancel = New-TkCtl Button 'Cancel' 508 246 96 32
     if ($Current) { $src.Text = [string]$Current.Source; $sha.Text = [string]$Current.Sha256 }
     $browse.Add_Click({ $o = New-Object System.Windows.Forms.OpenFileDialog; $o.Filter = 'Windows image (*.iso)|*.iso'; if ($o.ShowDialog() -eq 'OK') { $src.Text = $o.FileName } })
     $ok.Add_Click({
@@ -252,6 +300,7 @@ function Show-TkMonitorWindow {
     # A small window of its own: it can stay open while the main window is closed. It reads the upgrade's state file.
     if ($script:Mon.Form -and -not $script:Mon.Form.IsDisposed) { $script:Mon.Form.Activate(); return }
     $w = New-Object System.Windows.Forms.Form
+    $w.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96); $w.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
     $w.Text = 'StillGood - Windows 11 upgrade'; $w.Size = New-Object System.Drawing.Size(620, 380); $w.StartPosition = 'CenterScreen'
     $w.Font = New-Object System.Drawing.Font('Segoe UI', 9.75); $w.BackColor = [System.Drawing.Color]::White
     $stage = New-TkCtl Label '' 18 16 570 30; $stage.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 13); $stage.ForeColor = $script:Teal
@@ -278,10 +327,19 @@ function Show-TkWindow {
     [System.Windows.Forms.Application]::EnableVisualStyles()
     $script:Ui = @{ Root = $Root; Profile = $Profile; Org = $OrgPath; Scan = $null; Job = $null; OnDone = $null; Then = $null; Sync = (New-TkSync) }
     $ui = $script:Ui
+    # Display scaling (100 to 200 percent): sizes below are in pixels at 100 percent and scale with the screen.
+    $g = [System.Drawing.Graphics]::FromHwnd([IntPtr]::Zero); $ui.Scale = [double]$g.DpiX / 96; $g.Dispose()
 
     $f = New-Object System.Windows.Forms.Form
+    $f.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96); $f.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
     $f.Text = "StillGood $((Get-TkProduct).Version)"; $f.StartPosition = 'CenterScreen'
     $f.Size = New-Object System.Drawing.Size(1060, 740); $f.MinimumSize = New-Object System.Drawing.Size(960, 660)
+    # Fit the screen of an old PC: 1366x768 and 1024x768 leave about 728 pixels above the taskbar (seen in the lab).
+    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    if ($wa.Width -lt $f.Width -or $wa.Height -lt $f.Height) {
+        $f.MinimumSize = New-Object System.Drawing.Size([Math]::Min(960, $wa.Width), [Math]::Min(660, $wa.Height))
+        $f.Size = New-Object System.Drawing.Size([Math]::Min($f.Width, $wa.Width), [Math]::Min($f.Height, $wa.Height))
+    }
     $f.Font = New-Object System.Drawing.Font('Segoe UI', 9.75); $f.BackColor = [System.Drawing.Color]::White
     $ui.Form = $f; $ui.Tips = New-Object System.Windows.Forms.ToolTip
 
@@ -316,27 +374,40 @@ function Show-TkWindow {
     $ui.Log = New-Object System.Windows.Forms.TextBox; $ui.Log.Multiline = $true; $ui.Log.ReadOnly = $true; $ui.Log.ScrollBars = 'Vertical'; $ui.Log.Dock = 'Fill'
     $ui.Log.Font = New-Object System.Drawing.Font('Consolas', 9); $ui.Log.BackColor = [System.Drawing.Color]::FromArgb(250, 250, 250)
     $statusRow = New-Object System.Windows.Forms.Panel; $statusRow.Dock = 'Top'; $statusRow.Height = 30
-    $ui.Status = New-TkCtl Label 'Starting ...' 0 6 560 22
+    $ui.Status = New-TkCtl Label 'Starting ...' 0 6 560 22; $ui.Status.AutoEllipsis = $true
     $ui.Bar = New-TkCtl ProgressBar '' 580 8 180 14; $ui.Bar.Style = 'Marquee'; $ui.Bar.MarqueeAnimationSpeed = 30; $ui.Bar.Visible = $false
     $statusRow.Controls.AddRange(@($ui.Status, $ui.Bar))
     $bottom.Controls.Add($ui.Log); $bottom.Controls.Add($statusRow)
 
     $main = New-Object System.Windows.Forms.Panel; $main.Dock = 'Fill'; $main.Padding = New-Object System.Windows.Forms.Padding(16, 12, 16, 0)
-    $ui.Info = New-TkCtl Label '' 16 14 760 22
-    $ui.Verdict = New-TkCtl Label '  Windows 11: checking ...' 16 42 760 32; $ui.Verdict.TextAlign = 'MiddleLeft'; $ui.Verdict.BackColor = [System.Drawing.Color]::FromArgb(238, 238, 238)
+    $ui.Main = $main
+    $ui.Info = New-TkCtl Label '' 16 14 760 22; $ui.Info.AutoEllipsis = $true
+    $ui.Verdict = New-TkCtl Label 'Windows 11: checking ...' 16 42 760 32; $ui.Verdict.TextAlign = 'MiddleLeft'; $ui.Verdict.BackColor = [System.Drawing.Color]::FromArgb(238, 238, 238)
+    $ui.Verdict.Padding = New-Object System.Windows.Forms.Padding(8, 0, 8, 0)
     $ui.GroupsTitle = New-TkCtl Label 'What Clean apps removes (untick a group to keep it)' 16 88 420 20; $ui.GroupsTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9.75)
     $ui.Groups = New-Object System.Windows.Forms.FlowLayoutPanel; $ui.Groups.Location = New-Object System.Drawing.Point(16, 112); $ui.Groups.Size = New-Object System.Drawing.Size(400, 250)
     $ui.Groups.FlowDirection = 'TopDown'; $ui.Groups.WrapContents = $false; $ui.Groups.AutoScroll = $true
     $never = New-TkCtl Label 'Never removed: Windows itself, Windows Security, Edge, App Installer, runtimes, languages, driver apps and your own software.' 16 366 400 40; $never.ForeColor = [System.Drawing.Color]::Gray
+    $ui.Never = $never
     $ui.ListTitle = New-TkCtl Label 'Will be removed' 436 88 340 20; $ui.ListTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9.75)
     $ui.List = New-TkCtl ListBox '' 436 112 340 294; $ui.List.IntegralHeight = $false; $ui.List.HorizontalScrollbar = $true
     $main.Controls.AddRange(@($ui.Info, $ui.Verdict, $ui.GroupsTitle, $ui.Groups, $never, $ui.ListTitle, $ui.List))
+    $main.Add_Resize({ Set-TkUiLayout })
 
     $f.Controls.AddRange(@($main, $bottom, $left, $head))
     $main.BringToFront()
 
     $timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 250; $timer.Add_Tick({ Update-TkUiTick }); $ui.Timer = $timer
-    $f.Add_Shown({ $script:Ui.Timer.Start(); Start-TkUiScan })
+    $f.Add_Shown({
+        # After display scaling has resized the window: keep it on the screen it opened on.
+        $fm = $script:Ui.Form; $wa = [System.Windows.Forms.Screen]::FromControl($fm).WorkingArea
+        if ($fm.Width -gt $wa.Width -or $fm.Height -gt $wa.Height) {
+            $fm.MinimumSize = New-Object System.Drawing.Size([Math]::Min($fm.MinimumSize.Width, $wa.Width), [Math]::Min($fm.MinimumSize.Height, $wa.Height))
+            $fm.SetBounds($wa.Left, $wa.Top, [Math]::Min($fm.Width, $wa.Width), [Math]::Min($fm.Height, $wa.Height))
+        }
+        Set-TkUiLayout
+        $script:Ui.Timer.Start(); Start-TkUiScan
+    })
     $f.Add_FormClosing({ param($sender, $e) if ($script:Ui.Job) { $e.Cancel = $true; Show-TkUiInfo 'StillGood is still working. Close the window when it says it is done.' } })
     [void]$f.ShowDialog()
     $timer.Stop()
