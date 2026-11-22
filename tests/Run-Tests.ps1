@@ -585,6 +585,8 @@ It 'loads the window module without opening anything' {
     Import-Module (Join-Path $root 'modules\Gui.psm1') -Force -DisableNameChecking -Global
     Should-BeTrue ([bool](Get-Command Show-TkWindow -ErrorAction SilentlyContinue)) 'Show-TkWindow'
     Should-Be (Get-TkStageName 'WaitingForImage') 'Waiting for the image' 'stage names for the monitor'
+    # Found by filming the lab: "Watch the upgrade" threw under strict mode before the monitor had ever been opened.
+    Should-Be (Get-TkOpenMonitor) $null 'no monitor open yet, and asking does not throw'
 }
 
 Write-Host ''; Write-Host 'Source files' -ForegroundColor Cyan

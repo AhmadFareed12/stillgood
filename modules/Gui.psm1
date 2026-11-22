@@ -148,7 +148,7 @@ function Update-TkUiSummary {
     $t = "Clean apps will remove $($c.Remove) app$(if ($c.Remove -ne 1) { 's' }) and block $($c.Block) before they arrive"
     $sets = @($plan.Items | Where-Object { $_.Action -eq 'Setting' }).Count
     if ($sets) { $t += ", and turn off $sets thing$(if ($sets -ne 1) { 's' }) that slow$(if ($sets -eq 1) { 's' }) the start-up" }
-    $ui.GroupsTitle.Text = "$t. Tick a group for all its apps, or tick and untick apps one by one."
+    $ui.GroupsTitle.Text = "$t. Tick a group for all its apps, or open it to choose app by app."
     $ui.TabApps.Text = "Clean apps ($($c.Remove))"
     Set-TkUiLayout
 }
@@ -180,7 +180,8 @@ function Update-TkUiScan {
     $c = $colors[$v]
     $ui.Verdict.BackColor = [System.Drawing.Color]::FromArgb($c[0], $c[1], $c[2]); $ui.Verdict.ForeColor = [System.Drawing.Color]::FromArgb($c[3], $c[4], $c[5])
     $t = [string]$s.Readiness.Summary
-    if ($v -eq 'Supported' -or $v -eq 'ProbablySupported') { $t = "Windows 11: $t" }
+    if ($v -eq 'Supported' -and [int](Get-TkProp $os 'Build') -ge 22000) { $t = 'This PC already runs Windows 11 and meets its requirements.' }
+    if ($v -eq 'ProbablySupported') { $t = "Windows 11: $t" }
     if ($v -eq 'FixFirst') { $t = 'Windows 11: fix this first, then this PC can be upgraded: ' + (@($s.Readiness.Fixable) -join '; ') + '.' }
     if ($v -eq 'NotUpgradeable') { $t = "Windows 11 can't run on this PC: " + (@($s.Readiness.Blockers) -join '; ') + '.' }
     $ui.Verdict.Text = $t
@@ -196,7 +197,7 @@ function Update-TkUiScan {
         }
         $gn.Checked = [bool]@(@($gn.Nodes) | Where-Object { $_.Checked }).Count
     }
-    $ui.Tree.ExpandAll()
+    # Groups start folded, so every group and its count fits without scrolling; open one to choose app by app.
     if ($ui.Tree.Nodes.Count) { $ui.Tree.Nodes[0].EnsureVisible() }
     $ui.Tree.EndUpdate()
     $ui.Syncing = $false
@@ -354,9 +355,18 @@ function Update-TkMonitorWindow {
     $m.History.Text = ($lines -join "`r`n")
 }
 
+function Get-TkOpenMonitor {
+    # The upgrade monitor window if it is open, else $null. Index access on purpose: under strict mode, reading a
+    # missing key as a property ($script:Mon.Form before the window was ever opened) throws.
+    $f = $script:Mon['Form']
+    if ($f -and -not $f.IsDisposed) { return $f }
+    return $null
+}
+
 function Show-TkMonitorWindow {
     # A small window of its own: it can stay open while the main window is closed. It reads the upgrade's state file.
-    if ($script:Mon.Form -and -not $script:Mon.Form.IsDisposed) { $script:Mon.Form.Activate(); return }
+    $open = Get-TkOpenMonitor
+    if ($open) { $open.Activate(); return }
     $w = New-Object System.Windows.Forms.Form
     $w.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96); $w.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
     $w.Text = 'StillGood - Windows 11 upgrade'; $w.Size = New-Object System.Drawing.Size(620, 380); $w.StartPosition = 'CenterScreen'
@@ -375,7 +385,8 @@ function Show-TkMonitorWindow {
     $w.Add_FormClosed({ $script:Mon.Timer.Stop() })
     Update-TkMonitorWindow
     $t.Start()
-    if ($script:Ui.Form -and $script:Ui.Form.Visible) { $w.Show($script:Ui.Form) } else { [void]$w.ShowDialog() }
+    $main = $script:Ui['Form']
+    if ($main -and $main.Visible) { $w.Show($main) } else { [void]$w.ShowDialog() }
 }
 
 function Show-TkWindow {
@@ -421,8 +432,8 @@ function Show-TkWindow {
     $ui.ReportLink.Add_LinkClicked({ if ($script:Ui.Scan) { Start-Process $script:Ui.Scan.Html } })
     $left.Controls.Add($ui.ReportLink)
 
-    $bottom = New-Object System.Windows.Forms.Panel; $bottom.Dock = 'Bottom'; $bottom.Height = 200; $bottom.Padding = New-Object System.Windows.Forms.Padding(14, 6, 14, 12)
-    if ($wa.Height -lt 800) { $bottom.Height = 150 }   # a small screen: more room for the list of apps
+    $bottom = New-Object System.Windows.Forms.Panel; $bottom.Dock = 'Bottom'; $bottom.Height = 150; $bottom.Padding = New-Object System.Windows.Forms.Padding(14, 6, 14, 12)
+    if ($wa.Height -lt 800) { $bottom.Height = 120 }   # a small screen: more room for the list of apps
     $ui.Log = New-Object System.Windows.Forms.TextBox; $ui.Log.Multiline = $true; $ui.Log.ReadOnly = $true; $ui.Log.ScrollBars = 'Vertical'; $ui.Log.Dock = 'Fill'
     $ui.Log.Font = New-Object System.Drawing.Font('Consolas', 9); $ui.Log.BackColor = [System.Drawing.Color]::FromArgb(250, 250, 250)
     $statusRow = New-Object System.Windows.Forms.Panel; $statusRow.Dock = 'Top'; $statusRow.Height = 30
@@ -466,12 +477,14 @@ function Show-TkWindow {
 
     $timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 250; $timer.Add_Tick({ Update-TkUiTick }); $ui.Timer = $timer
     $f.Add_Shown({
-        # After display scaling has resized the window: keep it on the screen it opened on.
-        $fm = $script:Ui.Form; $wa = [System.Windows.Forms.Screen]::FromControl($fm).WorkingArea
-        if ($fm.Width -gt $wa.Width -or $fm.Height -gt $wa.Height) {
-            $fm.MinimumSize = New-Object System.Drawing.Size([Math]::Min($fm.MinimumSize.Width, $wa.Width), [Math]::Min($fm.MinimumSize.Height, $wa.Height))
-            $fm.SetBounds($wa.Left, $wa.Top, [Math]::Min($fm.Width, $wa.Width), [Math]::Min($fm.Height, $wa.Height))
-        }
+        # After display scaling has resized the window: size it to the screen it opened on, centred. A large screen
+        # gets a somewhat larger window (room to open a group or two without scrolling); a small one gets its whole
+        # working area.
+        $fm = $script:Ui.Form; $s = $script:Ui.Scale; $wa = [System.Windows.Forms.Screen]::FromControl($fm).WorkingArea
+        $w = [Math]::Min($wa.Width, [Math]::Max($fm.Width, [Math]::Min([int]($wa.Width * 0.8), [int](1120 * $s))))
+        $h = [Math]::Min($wa.Height, [Math]::Max($fm.Height, [Math]::Min([int]($wa.Height * 0.85), [int](860 * $s))))
+        $fm.MinimumSize = New-Object System.Drawing.Size([Math]::Min($fm.MinimumSize.Width, $wa.Width), [Math]::Min($fm.MinimumSize.Height, $wa.Height))
+        $fm.SetBounds($wa.Left + [int](($wa.Width - $w) / 2), $wa.Top + [int](($wa.Height - $h) / 2), $w, $h)
         Set-TkUiLayout
         $script:Ui.Timer.Start(); Start-TkUiScan
     })

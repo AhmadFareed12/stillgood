@@ -4,7 +4,7 @@ Set-StrictMode -Version 2.0
 
 $script:Run = $null
 # The product name lives here only, so naming the toolkit later is a one-line change.
-$script:Product = [pscustomobject]@{ Name = 'StillGood'; Version = '1.0.0' }
+$script:Product = [pscustomobject]@{ Name = 'StillGood'; Version = '1.0.1' }
 
 function Get-TkProduct { return $script:Product }
 

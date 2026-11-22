@@ -58,7 +58,7 @@ A VM can't show everything: a real spinning disk, a weak graphics chip, the powe
 - **Catalog-driven.** Only apps listed in [`catalog/apps.json`](catalog/apps.json) are ever removed. Unknown apps are kept and listed in the report.
 - **A protected list enforced in code** ([`modules/Guard.psm1`](modules/Guard.psm1)): runtimes and frameworks, the Windows shell, Start, Search and Settings, Windows Security, codecs, App Installer, languages and speech, driver companion apps, Edge and WebView2, anything Windows marks as a system component or non-removable, and your organization's own software. No catalog or switch can turn it off. The guard is checked when the plan is made, and again right before each removal.
 - **Never touches security or services.** The toolkit can write only to a short list of registry settings. Defender, the firewall, Windows Update, UAC, BitLocker and licensing are refused in code, even if the list were widened by mistake. It doesn't stop or disable any service.
-- **You choose, app by app.** Every app StillGood can remove sits in a group (AI apps, news and extras, Xbox and games, retired apps, everyday tools, mail and chat, the Store...), each with its own tick: tick a group for all its apps, or untick one app to keep it. The defaults suit an office PC: the everyday tools (Calculator, Photos, Snipping Tool, Paint, Camera, Media Player, To Do, Quick Assist), Outlook, Teams and the Store start unticked. For a kiosk or a till, tick them. The two start-up items have a group of their own.
+- **You choose, app by app.** Every app StillGood can remove sits in a group (AI apps, news and extras, Xbox and games, retired apps, everyday tools, mail and chat, the Store...), each with its own tick: tick a group for all its apps, or open it and untick one app to keep it. The groups start folded, so the whole list fits on the screen. The defaults suit an office PC: the everyday tools (Calculator, Photos, Snipping Tool, Paint, Camera, Media Player, To Do, Quick Assist), Outlook, Teams and the Store start unticked. For a kiosk or a till, tick them. The two start-up items have a group of their own.
 - **OneDrive safety.** OneDrive is never removed, for anyone. It stops starting at sign-in only for people with no files in it who aren't signed in to it. Turning off its set-up for new users is a choice of its own, unticked by default.
 - **Honest progress.** Time left is shown only where it can be measured: the download and the image check. During Setup, the monitor shows Setup's own reported percentage, whether Setup is working, and the last line of its log. There are no invented countdowns.
 - **Everything logged, everything undoable, safe to run again.** Each run writes a readable log, a machine log, the plan, the result and an undo file. A second run acts only on what is still there.
@@ -88,7 +88,7 @@ Requirements: Windows 10 version 2004 or later, or Windows 11, on 64-bit x64; Wi
 
 ![The StillGood window on a lab PC](docs/window.png)
 
-The left column lists the actions. In the middle you see the PC and its Windows 11 verdict, then two tabs. *Make it faster* lists what slows this PC down and what to do. *Clean apps* has one list of everything Clean apps can do, under its group, each with its own tick: tick a group for all of it, or untick one app to keep it. The line above the list says exactly what will go. The log at the bottom shows what StillGood is doing. The upgrade is watched in a small window of its own, which you can leave open after closing the main one.
+The left column lists the actions. In the middle you see the PC and its Windows 11 verdict, then two tabs. *Make it faster* lists what slows this PC down and what to do. *Clean apps* lists everything Clean apps can do, in groups that start folded so they all fit: tick a group for all of it, or open it and untick one app to keep it. The line above the list says exactly what will go. The window opens sized to the screen: the whole working area of an old laptop, a bit more room on a large monitor. The log at the bottom shows what StillGood is doing. The upgrade is watched in a small window of its own, which you can leave open after closing the main one.
 
 **From a script, a terminal or an RMM tool:**
 
@@ -192,7 +192,7 @@ The window itself is tested by hand on a lab VM: it is opened with `StillGood.cm
 
 ## Status
 
-**v1.0.** All three blocks are built and lab-proven, including the full upgrade from Windows 10 with its restarts. One lab, English Windows, no fleet numbers yet: test it on your own PCs first.
+**v1.0.1.** All three blocks are built and lab-proven, including the full upgrade from Windows 10 with its restarts. One lab, English Windows, no fleet numbers yet: test it on your own PCs first.
 
 **Proven in the lab (2026-11-22):**
 - **55 offline tests** against a fake PC (`tests/Run-Tests.ps1`).
@@ -215,6 +215,7 @@ The window itself is tested by hand on a lab VM: it is opened with `StillGood.cm
 - On Windows 10, removing an app for every user while it is still set up for new users fails at Windows' clean-up step (`0x80070002`), so every removal was reported as an error. StillGood now removes the new-user copy first, which takes every user's copy with it: no errors on Windows 10, 31 of 31 on Windows 11.
 - The processor check now recognises Xeon E3/E5/E7 (v1 to v6) and the 2013-2016 Atom-class Celeron and Pentium as not on Microsoft's list. They used to show as unknown, which made the report say "probably supported".
 - Windows 11 creates an empty OneDrive folder for every user, and writes a OneDrive folder path in the registry before anyone signs in. StillGood first took both as "uses OneDrive" and, safely, did nothing. It now looks for files in the folder and for a signed-in account.
+- Filming the upgrade for a demo showed that *Watch the upgrade* threw an error instead of opening its progress window: under PowerShell's strict mode, reading a window that was never opened failed. The upgrade itself was never affected. Fixed in 1.0.1, with a test.
 
 **Known limits:**
 1. Not run in the lab: the download, stall and drop-folder paths (the lab VMs have no network), sign-out during Setup, and a forced rollback. They have offline tests only.
