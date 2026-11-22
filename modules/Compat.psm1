@@ -68,6 +68,17 @@ function Get-TkSystemDiskBytes {
     return [double]$Volume.Size
 }
 
+function Get-TkBypassReason {
+    # A failed check the unsupported-hardware option gets around, in a few plain words.
+    param($Check)
+    switch ([string]$Check.Name) {
+        'TPM' { if ([string]$Check.Found -eq 'none') { return 'no TPM 2.0' } else { return "$($Check.Found) instead of TPM 2.0" } }
+        'Processor model' { return 'its processor is not on Microsoft''s list' }
+        'UEFI and Secure Boot' { return 'legacy BIOS instead of UEFI' }
+        default { return "$($Check.Name): $($Check.Found)" }
+    }
+}
+
 function Get-TkVerdict {
     # Pure function: turns the checks into one verdict.
     param([object[]]$Checks)
@@ -77,7 +88,12 @@ function Get-TkVerdict {
     $unknown = @($Checks | Where-Object { $_.Status -eq 'Unknown' })
     if ($blockers.Count) { $v = 'NotUpgradeable'; $text = 'This PC cannot run Windows 11.' }
     elseif ($fixable.Count) { $v = 'FixFirst'; $text = 'Fix the items marked below first; then this PC can be upgraded.' }
-    elseif ($bypass.Count) { $v = 'UnsupportedButUpgradeable'; $text = 'This PC fails Windows 11''s hardware check, but the unsupported-hardware option can upgrade it. Microsoft does not support Windows 11 on this hardware and does not guarantee updates there.' }
+    elseif ($bypass.Count) {
+        # What works comes first, then the plain reason and Microsoft's position (never hidden: the admin decides).
+        $why = (@($bypass | ForEach-Object { Get-TkBypassReason $_ }) -join ', ')
+        $v = 'UnsupportedButUpgradeable'
+        $text = "StillGood can upgrade this PC to Windows 11. It doesn't pass Microsoft's hardware check ($why), so it upgrades with the unsupported-hardware option. Microsoft doesn't officially support Windows 11 on this hardware or promise updates for it."
+    }
     elseif ($unknown.Count) { $v = 'ProbablySupported'; $text = 'No failed checks, but some could not be read (run as administrator for TPM and Secure Boot).' }
     else { $v = 'Supported'; $text = 'This PC meets Windows 11''s requirements.' }
     return [pscustomobject]@{

@@ -83,10 +83,11 @@ $script:Bodies = @{
         $cat = Get-TkCatalog
         $org = Get-TkOrganization -Path ([string]$a.Org) -Catalog $cat
         $plan = New-TkCleanPlan -Inventory $inv -Catalog $cat -Organization $org
-        $rep = New-TkReport -Inventory $inv -Readiness $ready -Plan $plan -OneDrive @(Get-TkOneDriveUsers)
+        $speed = Get-TkSpeedReport -Inventory $inv -CleanCount $plan.Counts.Remove
+        $rep = New-TkReport -Inventory $inv -Readiness $ready -Plan $plan -OneDrive @(Get-TkOneDriveUsers) -Speed $speed
         $paths = Save-TkReport -Report $rep -Dir (Get-TkRun).Dir
-        Write-TkLog ('Checked: {0} {1} apps to remove, {2} to block, {3} protected.' -f $ready.Summary, $plan.Counts.Remove, $plan.Counts.Block, $plan.Counts.Protected)
-        [pscustomobject]@{ Os = $inv.Os; Elevated = $inv.Elevated; Readiness = $ready; Plan = $plan; Html = $paths.Html }
+        Write-TkLog ('Checked: {0} {1} apps to remove, {2} to block, {3} protected. {4} ways to make it faster.' -f $ready.Summary, $plan.Counts.Remove, $plan.Counts.Block, $plan.Counts.Protected, @($speed.Findings).Count)
+        [pscustomobject]@{ Os = $inv.Os; Elevated = $inv.Elevated; Readiness = $ready; Plan = $plan; Speed = $speed; Html = $paths.Html }
     }.ToString()
     Clean   = {
         param($a)

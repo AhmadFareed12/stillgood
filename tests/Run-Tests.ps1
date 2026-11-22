@@ -106,6 +106,10 @@ It 'turns the checks into one honest verdict' {
     Should-Be (Get-TkVerdict -Checks ($all + $space)).Verdict 'FixFirst' 'disk space'
     Should-Be (Get-TkVerdict -Checks ($all + $unk)).Verdict 'ProbablySupported' 'unknown'
     Should-Be (Get-TkVerdict -Checks ($all + $sse + $space)).Verdict 'NotUpgradeable' 'blocker beats fixable'
+    $s = (Get-TkVerdict -Checks ($all + $tpm)).Summary
+    Should-BeTrue ($s -like 'StillGood can upgrade this PC*') 'leads with what works'
+    Should-BeTrue ($s -like '*no TPM 2.0*') 'names the reason in plain words'
+    Should-BeTrue ($s -like '*doesn''t officially support*') 'and says where Microsoft stands'
 }
 
 Write-Host ''; Write-Host 'Catalog and plans' -ForegroundColor Cyan
@@ -279,9 +283,13 @@ It 'writes an HTML report that escapes what it shows' {
     $checks = @((New-TkCheck 'TPM' '2.0' 'none' 'Fail' $true 'n'), (New-TkCheck 'Memory' '4 GB' '8 GB' 'Pass' $false 'n'))
     $v = Get-TkVerdict -Checks $checks
     $ready = [pscustomobject]@{ Verdict = $v.Verdict; Summary = $v.Summary; Blockers = $v.Blockers; Fixable = $v.Fixable; Bypassable = $v.Bypassable; Unknown = $v.Unknown; Checks = $checks }
-    $rep = New-TkReport -Inventory $inv -Readiness $ready -Plan $plan -OneDrive @([pscustomobject]@{ Sid = 'S'; Profile = 'ana'; State = 'Uses'; Folders = @('OneDrive') })
+    $sp = Get-TkSpeedFindings -Facts ([pscustomobject]@{ DiskMedia = 'HDD'; RamGB = 4 })
+    $speed = [pscustomobject]@{ Findings = @($sp.Findings); Good = @($sp.Good); Error = '' }
+    $rep = New-TkReport -Inventory $inv -Readiness $ready -Plan $plan -OneDrive @([pscustomobject]@{ Sid = 'S'; Profile = 'ana'; State = 'Uses'; Folders = @('OneDrive') }) -Speed $speed
     $paths = Save-TkReport -Report $rep -Dir $tmp
     $html = Get-Content -LiteralPath $paths.Html -Raw
+    Should-BeTrue ($html -like '*Make this PC faster*') 'speed section'
+    Should-BeTrue ($html -like '*A spinning hard drive*') 'a finding in it'
     Should-BeTrue ($html -like '*Windows 11 readiness*') 'readiness section'
     Should-BeTrue ($html -like '*Clean apps preview*') 'plan section'
     Should-BeTrue ($html -like '*&lt;script&gt;alert(1)&lt;/script&gt;*') 'escaped'
@@ -469,6 +477,40 @@ It 'hands the upgrade to a background task, once' {
     Should-BeTrue (Test-Path -LiteralPath (Join-Path $job.AppDir 'worker\Upgrade-Worker.ps1')) 'runs from a local copy'
     Should-Throw { Start-TkUpgrade -Config $cfg } '*already in progress*'
 }
+
+Write-Host ''; Write-Host 'Make it faster' -ForegroundColor Cyan
+It 'finds what slows an old PC, most important first' {
+    $f = [pscustomobject]@{ DiskMedia = 'HDD'; DiskHealth = 'Healthy'; DiskWear = $null; DiskReadErrors = 0; RamGB = 4; Slots = 2; SlotsUsed = 1; MemInUsePct = 88
+        FreeGB = 12; SizeGB = 120; TempGB = 3.2; HiberGB = 3.1; WindowsOld = $true; StartupCount = 11; StartupNames = @('Spotify', 'Steam')
+        PowerScheme = 'a1841308-3541-4fab-bc81-f71556f20b4a'; UptimeDays = 23.4; RebootPending = $false; Antivirus = @('Windows Defender', 'Other AV'); BatteryPct = 48; CleanCount = 23 }
+    $r = Get-TkSpeedFindings -Facts $f
+    $ids = @($r.Findings | ForEach-Object { $_.Id })
+    foreach ($id in 'hdd', 'memory', 'space', 'startup', 'antivirus', 'power', 'restart', 'battery', 'clean-apps') { Should-BeTrue ($ids -contains $id) $id }
+    $rank = @{ High = 0; Medium = 1; Low = 2 }
+    $ranks = @($r.Findings | ForEach-Object { $rank[[string]$_.Impact] })
+    Should-Be (($ranks | Sort-Object) -join ',') ($ranks -join ',') 'most important first'
+    $mem = @($r.Findings | Where-Object { $_.Id -eq 'memory' })[0]
+    Should-BeTrue ($mem.Fix -like '*1 of its 2 memory slots is free*') 'a free memory slot is named'
+    Should-BeTrue ($mem.Found -like '*88% of it in use right now*') 'memory in use right now'
+    $space = @($r.Findings | Where-Object { $_.Id -eq 'space' })[0]
+    Should-Be $space.Impact 'Medium' '12 GB free'
+    Should-BeTrue ($space.Fix -like '*Windows.old*' -and $space.Fix -like '*hibernation*' -and $space.Fix -like '*3.2 GB*') 'what can be freed'
+    Should-BeTrue ((@($r.Findings | Where-Object { $_.Id -eq 'restart' })[0]).Title -like '*23 days*') 'days without a restart'
+}
+It 'puts a failing disk first, and claims nothing it could not read' {
+    $r = Get-TkSpeedFindings -Facts ([pscustomobject]@{ DiskMedia = 'SSD'; DiskHealth = 'Warning'; RamGB = 8 })
+    Should-Be $r.Findings[0].Id 'disk-health' 'failing disk first'
+    Should-BeFalse (@($r.Good) -contains 'Windows runs from an SSD') 'a failing SSD is not good news'
+    Should-Be @((Get-TkSpeedFindings -Facts ([pscustomobject]@{})).Findings).Count 0 'nothing read, nothing claimed'
+}
+It 'says what is already good on a healthy PC' {
+    $f = [pscustomobject]@{ DiskMedia = 'SSD'; DiskHealth = 'Healthy'; RamGB = 16; Slots = 2; SlotsUsed = 2; FreeGB = 200; SizeGB = 476; TempGB = 0.3; StartupCount = 4
+        PowerScheme = '381b4222-f694-41f0-9685-ff5bb260df2e'; UptimeDays = 1; RebootPending = $false; Antivirus = @('Windows Defender'); CleanCount = 0 }
+    $r = Get-TkSpeedFindings -Facts $f
+    Should-Be @($r.Findings).Count 0 'nothing to do'
+    foreach ($g in 'Windows runs from an SSD', '16 GB of memory', '200 GB free on the disk', 'only 4 programs start with Windows') { Should-BeTrue (@($r.Good) -contains $g) $g }
+}
+It 'never reads the real PC in test mode' { Should-Throw { Get-TkSpeedFacts -Inventory $null } 'Test mode*' }
 
 Write-Host ''; Write-Host 'The window' -ForegroundColor Cyan
 Import-Module (Join-Path $root 'modules\GuiCore.psm1') -Force -DisableNameChecking -Global

@@ -66,7 +66,8 @@ function Invoke-TkReportMode {
     $cat = Get-TkCatalog
     $org = Get-TkOrganization -Path (Get-TkOrgPath) -Catalog $cat
     $plan = New-TkCleanPlan -Inventory $inv -Catalog $cat -Organization $org -Include $Include -Exclude $Exclude
-    $rep = New-TkReport -Inventory $inv -Readiness $ready -Plan $plan -OneDrive @(Get-TkOneDriveUsers)
+    $speed = Get-TkSpeedReport -Inventory $inv -CleanCount $plan.Counts.Remove
+    $rep = New-TkReport -Inventory $inv -Readiness $ready -Plan $plan -OneDrive @(Get-TkOneDriveUsers) -Speed $speed
     $paths = Save-TkReport -Report $rep -Dir $run.Dir
     Write-TkReportSummary -Report $rep -Paths $paths
     return @{ Run = $run; Readiness = $ready; Plan = $plan; Paths = $paths }
@@ -103,7 +104,7 @@ function Invoke-TkUpgradeMode {
     if ($rd.Verdict -eq 'NotUpgradeable') { Write-Host '  This PC cannot run Windows 11:' -ForegroundColor Red; @($rd.Blockers) | ForEach-Object { Write-Host "    - $_" }; return 2 }
     if ($rd.Verdict -eq 'FixFirst') { Write-Host '  Fix these first:' -ForegroundColor Yellow; @($rd.Fixable) | ForEach-Object { Write-Host "    - $_" }; return 2 }
     if ($rd.Verdict -eq 'UnsupportedButUpgradeable') {
-        Write-Host '  This PC fails Microsoft''s hardware check:' -ForegroundColor Yellow
+        Write-Host '  This PC doesn''t pass Microsoft''s hardware check:' -ForegroundColor Yellow
         @($rd.Bypassable) | ForEach-Object { Write-Host "    - $_" }
         Write-Host '  Microsoft does not support Windows 11 on this hardware and does not guarantee updates for it.' -ForegroundColor Yellow
         if (-not $AllowUnsupportedHardware) { Write-Host '  To upgrade anyway, run again with -AllowUnsupportedHardware. The decision is yours.'; return 2 }

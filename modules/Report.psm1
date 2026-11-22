@@ -3,11 +3,11 @@
 Set-StrictMode -Version 2.0
 
 function New-TkReport {
-    param([Parameter(Mandatory = $true)]$Inventory, $Readiness, $Plan, $OneDrive)
+    param([Parameter(Mandatory = $true)]$Inventory, $Readiness, $Plan, $OneDrive, $Speed)
     return [pscustomobject]@{
         Kind = 'Report'; Product = (Get-TkProduct).Name; Version = (Get-TkProduct).Version
         Created = (Get-Date).ToString('s'); Computer = $env:COMPUTERNAME; Elevated = [bool]$Inventory.Elevated
-        Os = $Inventory.Os; Summary = $Inventory.Summary; Readiness = $Readiness; Plan = $Plan; OneDrive = @($OneDrive | Where-Object { $_ })
+        Os = $Inventory.Os; Summary = $Inventory.Summary; Readiness = $Readiness; Speed = $Speed; Plan = $Plan; OneDrive = @($OneDrive | Where-Object { $_ })
         Startup = @($Inventory.Startup | Where-Object { $_ })
         Programs = @($Inventory.Programs | Where-Object { $_ } | Select-Object DisplayName, Publisher, Version | Sort-Object DisplayName)
     }
@@ -45,7 +45,7 @@ function ConvertTo-TkReportHtml {
     Put 'h1{font-size:28px;margin:0}h2{font-size:20px;margin:36px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:16px;margin:22px 0 6px}'
     Put '.sub{color:#666;margin:2px 0 0}table{border-collapse:collapse;width:100%;margin:6px 0 10px}td,th{border-bottom:1px solid #eee;padding:6px 8px;text-align:left;vertical-align:top}'
     Put 'th{font-weight:600;background:#fafafa}.chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:13px}.ok{background:#e3f4e6;color:#145c26}'
-    Put '.warn{background:#fff3d6;color:#7a4b00}.bad{background:#fde3e1;color:#8a1c12}.unk{background:#eee;color:#555}.verdict{font-size:17px;padding:10px 14px;border-radius:8px}'
+    Put '.info{background:#e4f0fb;color:#104678}.warn{background:#fff3d6;color:#7a4b00}.bad{background:#fde3e1;color:#8a1c12}.unk{background:#eee;color:#555}.verdict{font-size:17px;padding:10px 14px;border-radius:8px}'
     Put 'dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 18px}dt{color:#666}dd{margin:0}details{margin:10px 0}summary{cursor:pointer;font-weight:600}'
     Put 'code{background:#f4f4f4;padding:1px 5px;border-radius:4px}.counts{color:#444}footer{margin:40px 0;color:#666;font-size:14px}</style></head><body>'
     Put "<header><h1>$(Esc $Report.Computer)</h1><p class=""sub"">$(Esc $Report.Product) $(Esc $Report.Version) &middot; report only, nothing was changed &middot; $(Esc $Report.Created)</p></header>"
@@ -61,7 +61,7 @@ function ConvertTo-TkReportHtml {
 
     if ($Report.Readiness) {
         $rd = $Report.Readiness
-        $cls = @{ Supported = 'ok'; ProbablySupported = 'ok'; UnsupportedButUpgradeable = 'warn'; FixFirst = 'warn'; NotUpgradeable = 'bad' }[$rd.Verdict]
+        $cls = @{ Supported = 'ok'; ProbablySupported = 'ok'; UnsupportedButUpgradeable = 'info'; FixFirst = 'warn'; NotUpgradeable = 'bad' }[$rd.Verdict]
         Put "<h2>Windows 11 readiness</h2><p class=""verdict $cls"">$(Esc $rd.Summary)</p>"
         Put '<table><tr><th>Check</th><th>Needs</th><th>Found</th><th>Result</th><th>Note</th></tr>'
         foreach ($c in @($rd.Checks)) {
@@ -69,6 +69,22 @@ function ConvertTo-TkReportHtml {
             Put "<tr><td>$(Esc $c.Name)</td><td>$(Esc $c.Required)</td><td>$(Esc $c.Found)</td><td><span class=""chip $($l[0])"">$(Esc $l[1])</span></td><td>$(Esc $c.Note)</td></tr>"
         }
         Put '</table>'
+    }
+
+    $sp = Get-TkProp $Report 'Speed'
+    if ($sp) {
+        Put '<h2>Make this PC faster</h2>'
+        $fs = @($sp.Findings | Where-Object { $_ })
+        if ($fs.Count) {
+            Put '<p>Most important first. Nothing here was changed; each line says what to do.</p><table><tr><th>Effect</th><th>What was found</th><th>What to do</th></tr>'
+            foreach ($f in $fs) {
+                $cls = @{ High = 'warn'; Medium = 'info'; Low = 'unk' }[[string]$f.Impact]
+                Put "<tr><td><span class=""chip $cls"">$(Esc $f.Impact)</span></td><td><b>$(Esc $f.Title)</b><br>$(Esc $f.Found)</td><td>$(Esc $f.Fix)</td></tr>"
+            }
+            Put '</table>'
+        } else { Put '<p>Nothing found that slows this PC down.</p>' }
+        if (@($sp.Good | Where-Object { $_ }).Count) { Put "<p class=""counts"">Already good: $(Esc ((@($sp.Good) -join ', ') + '.'))</p>" }
+        if ([string](Get-TkProp $sp 'Error')) { Put "<p class=""counts"">Some readings could not be taken: $(Esc $sp.Error)</p>" }
     }
 
     if ($Report.Plan) {
@@ -121,6 +137,11 @@ function Write-TkReportSummary {
     if ($Report.Readiness) {
         Write-Host "  Windows 11: $($Report.Readiness.Summary)"
         foreach ($b in @($Report.Readiness.Blockers) + @($Report.Readiness.Fixable)) { if ($b) { Write-Host "    - $b" -ForegroundColor Yellow } }
+    }
+    $sp = Get-TkProp $Report 'Speed'
+    if ($sp -and @($sp.Findings).Count) {
+        Write-Host '  Make this PC faster:'
+        foreach ($f in @($sp.Findings)) { Write-Host ("    [{0}] {1}" -f $f.Impact, $f.Title) }
     }
     if ($Report.Plan) {
         $c = $Report.Plan.Counts

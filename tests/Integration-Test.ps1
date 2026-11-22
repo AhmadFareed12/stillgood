@@ -110,8 +110,15 @@ try {
     $rep = Get-LatestRun '*-report'
     Copy-Item -LiteralPath (Join-Path $rep.FullName 'report.html') -Destination $ResultsDir
     Copy-Item -LiteralPath (Join-Path $rep.FullName 'report.json') -Destination $ResultsDir
-    $plan = (Get-Content -LiteralPath (Join-Path $rep.FullName 'report.json') -Raw | ConvertFrom-Json).Plan
+    $repJson = Get-Content -LiteralPath (Join-Path $rep.FullName 'report.json') -Raw | ConvertFrom-Json
+    $plan = $repJson.Plan
     $c = $plan.Counts
+    # Make it faster: the readings were taken on real Windows (disk, memory, space), with no error.
+    $sp = $repJson.Speed
+    $spOk = $sp -and -not [string]$sp.Error -and $sp.Facts -and $sp.Facts.RamGB -and $null -ne $sp.Facts.FreeGB
+    $spDetail = 'no speed section'
+    if ($sp) { $spDetail = ("{0} findings ({1}); disk {2}, {3} GB memory, {4} GB free; already good: {5}" -f @($sp.Findings).Count, ((@($sp.Findings) | ForEach-Object { $_.Id }) -join ', '), $sp.Facts.DiskMedia, $sp.Facts.RamGB, $sp.Facts.FreeGB, (@($sp.Good) -join ', ')) }
+    Step 'make it faster: readings taken' $spOk $spDetail
     $greg = (Get-Date).ToString('yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
     Step 'file stamps use the Gregorian calendar' ($rep.Name.StartsWith($greg)) "run folder: $($rep.Name)"
     Step 'report (everything ticked)' ($r.Code -eq 0) ("exit {0}; plan: {1} to remove, {2} to block, {3} kept, {4} unknown, {5} protected" -f $r.Code, $c.Remove, $c.Block, $c.Keep, $c.Unknown, $c.Protected)

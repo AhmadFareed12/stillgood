@@ -10,14 +10,14 @@ This toolkit is for that team.
 
 | Mode | What happens | Changes the PC? |
 |---|---|---|
-| **Report** | An inventory of the PC, Windows 11 readiness (each check with what it needs, what was found, and whether anything gets around it), and an exact preview of what Clean apps would do. HTML for people, JSON for tools. | No |
+| **Report** | An inventory of the PC, Windows 11 readiness (each check with what it needs, what was found, and whether anything gets around it), what would make it faster (most important first, with what to do), and an exact preview of what Clean apps would do. HTML for people, JSON for tools. | No |
 | **Clean apps** | Removes the apps Windows ships and pushes (Copilot, Xbox, Widgets, promoted third-party apps), for every user and for new users. It blocks them from coming back with feature updates, and turns off silent app installs. | Yes, with undo |
 | **Upgrade** | Gets Microsoft's Windows 11 image and checks it against a pinned SHA-256. It runs Setup's compatibility scan first, then upgrades silently in a background task that survives sign-out. After a verified sign-in on the new Windows, it deletes the image. | Yes |
 | **Upgrade + clean apps** | Cleans first, upgrades, then cleans again at the first sign-in on Windows 11, for the apps Windows 11 brings. | Yes |
 | **Monitor** | Shows the upgrade's stage, measured progress and real activity. | No |
 | **Undo** | Puts back every setting a clean-apps run changed and lifts its blocks. The removed apps come back from the Microsoft Store. | Yes |
 
-*Optimize* (a short, measured list of settings, each with one-click undo) is planned. Clean apps already gives nearly all of the speed.
+**Make it faster.** The check also looks for what really slows an old PC down: a spinning hard drive (an SSD is the biggest single speed-up), too little memory and whether a slot is free, programs that start with Windows, a nearly full disk and what can be freed, a failing disk, two antivirus programs at once, a restart that is waiting or weeks without one, the Power saver plan and a worn battery. Most important first, each with what to do, and what is already good. It only looks: nothing changes, and there are no registry "speed tweaks". One-click fixes for the safe ones, with undo, are planned.
 
 ## The rules
 
@@ -50,7 +50,7 @@ Requirements: Windows 10 version 2004 or later, or Windows 11, on 64-bit x64; Wi
 
 ![The StillGood window on a lab PC](docs/window.png)
 
-The left column lists the actions. In the middle you see the PC, its Windows 11 verdict, and one list of every app Clean apps can remove, under its group, each with its own tick: tick a group for all its apps, or untick one app to keep it. The line above the list says exactly what will go. The log at the bottom shows what StillGood is doing. The upgrade is watched in a small window of its own, which you can leave open after closing the main one.
+The left column lists the actions. In the middle you see the PC and its Windows 11 verdict, then two tabs. *Make it faster* lists what slows this PC down and what to do. *Clean apps* has one list of every app Clean apps can remove, under its group, each with its own tick: tick a group for all its apps, or untick one app to keep it. The line above the list says exactly what will go. The log at the bottom shows what StillGood is doing. The upgrade is watched in a small window of its own, which you can leave open after closing the main one.
 
 **From a script, a terminal or an RMM tool:**
 
@@ -152,7 +152,7 @@ The window itself is tested by hand on a lab VM: it is opened with `StillGood.cm
 **v0.3, preview.** All three blocks are built and lab-proven, including the full upgrade from Windows 10 with its restarts. Still a preview: one lab, English Windows, no fleet yet.
 
 **Proven in the lab (2026-11-22):**
-- **49 offline tests** against a fake PC (`tests/Run-Tests.ps1`).
+- **53 offline tests** against a fake PC (`tests/Run-Tests.ps1`).
 - **The full upgrade from Windows 10, on a PC that fails Microsoft's hardware check.** A Windows 10 22H2 Pro VM with UEFI but no TPM, started as SYSTEM the way an RMM tool runs it, with `-AllowUnsupportedHardware`:
   - Clean apps first (the defaults): 23 apps removed, 27 blocked before they arrive, no errors;
   - the image copied and checked against its SHA-256, Setup's compatibility scan, Setup's restarts, and the first sign-in on Windows 11 26H2 (build 26300): 18 minutes in all;
@@ -160,7 +160,7 @@ The window itself is tested by hand on a lab VM: it is opened with `StillGood.cm
   - none of the 27 apps came back with Windows 11, including Clipchamp and Dev Home, which a fresh 26H2 install adds for new users.
 - **The supported upgrade from Windows 10**, on the same Windows 10 22H2 with TPM 2.0 and Secure Boot, without the unsupported option: readiness "Supported", the same Clean apps result, Windows 11 26H2 in 16 minutes, then the image deleted, the tasks gone and none of the 27 apps back.
 - **Windows Sandbox**, real Windows (`tests/Integration-Test.ps1`): 13 of 13 checks. These cover the stay-clean settings for a signed-out user and new users, the blocks, a second run that changes nothing, and Undo putting every value back.
-- **A fresh Windows 11 26H2 Pro VM**, Hyper-V with a virtual TPM. Clean apps ran as SYSTEM with a user signed in, the way an RMM tool runs it, and passed 13 of 13 checks with everything ticked (`-Include all`):
+- **A fresh Windows 11 26H2 Pro VM**, Hyper-V with a virtual TPM. Clean apps ran as SYSTEM with a user signed in, the way an RMM tool runs it, and passed 14 of 14 checks with everything ticked (including the speed readings, as SYSTEM) (`-Include all`):
   - 31 apps removed for every user and new users, and the run log shows no removal outside the plan;
   - all 75 kept and protected apps untouched;
   - the settings applied for the signed-in user, new users and the machine;

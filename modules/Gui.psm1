@@ -46,19 +46,46 @@ function Set-TkUiLayout {
     # Lays out the middle of the window for its actual size, from measured text: an old PC's small screen, a large
     # one, 100 to 200 percent display scaling and long texts all fit without cutting anything off.
     $ui = $script:Ui
-    if (-not $ui.Tree -or -not $ui.Main) { return }
+    if (-not $ui.Tree -or -not $ui.Main -or -not $ui.Tabs) { return }
     $s = $ui.Scale; $pad = [int](16 * $s)
     $W = $ui.Main.ClientSize.Width; $H = $ui.Main.ClientSize.Height
     $inner = [Math]::Max([int](300 * $s), $W - 2 * $pad)
     $ui.Info.SetBounds($pad, [int](12 * $s), $inner, [int](22 * $s))
     $vh = Measure-TkText $ui.Verdict.Text $ui.Verdict.Font ($inner - [int](20 * $s))
     $ui.Verdict.SetBounds($pad, $ui.Info.Bottom + [int](6 * $s), $inner, [Math]::Max([int](34 * $s), $vh + [int](12 * $s)))
-    $top = $ui.Verdict.Bottom + [int](12 * $s)
-    $ui.GroupsTitle.SetBounds($pad, $top, $inner, (Measure-TkText $ui.GroupsTitle.Text $ui.GroupsTitle.Font $inner) + [int](2 * $s))
-    $nh = Measure-TkText $ui.Never.Text $ui.Never.Font $inner
-    $ui.Never.SetBounds($pad, $H - $nh - [int](6 * $s), $inner, $nh)
-    $ty = $ui.GroupsTitle.Bottom + [int](4 * $s)
-    $ui.Tree.SetBounds($pad, $ty, $inner, [Math]::Max([int](80 * $s), $ui.Never.Top - $ty - [int](6 * $s)))
+    $ty = $ui.Verdict.Bottom + [int](10 * $s)
+    $ui.Tabs.SetBounds($pad, $ty, $inner, [Math]::Max([int](120 * $s), $H - $ty - [int](6 * $s)))
+    # Inside the Clean apps tab: the summary line, the list, and what is never removed.
+    $tw = $ui.TabApps.ClientSize.Width; $th = $ui.TabApps.ClientSize.Height
+    $ip = [int](8 * $s); $iw = [Math]::Max([int](200 * $s), $tw - 2 * $ip)
+    $ui.GroupsTitle.SetBounds($ip, $ip, $iw, (Measure-TkText $ui.GroupsTitle.Text $ui.GroupsTitle.Font $iw) + [int](2 * $s))
+    $nh = Measure-TkText $ui.Never.Text $ui.Never.Font $iw
+    $ui.Never.SetBounds($ip, $th - $nh - [int](4 * $s), $iw, $nh)
+    $y = $ui.GroupsTitle.Bottom + [int](4 * $s)
+    $ui.Tree.SetBounds($ip, $y, $iw, [Math]::Max([int](60 * $s), $ui.Never.Top - $y - [int](4 * $s)))
+}
+
+function Show-TkUiSpeed {
+    # The "Make it faster" tab: each finding, most important first, with what to do; then what is already good.
+    param($Speed)
+    $ui = $script:Ui; $r = $ui.Speed
+    $r.Clear()
+    $bold = New-Object System.Drawing.Font($r.Font, [System.Drawing.FontStyle]::Bold)
+    $black = [System.Drawing.Color]::FromArgb(30, 30, 30); $grey = [System.Drawing.Color]::FromArgb(85, 85, 85)
+    $tone = @{ High = [System.Drawing.Color]::FromArgb(176, 74, 0); Medium = [System.Drawing.Color]::FromArgb(16, 70, 120); Low = [System.Drawing.Color]::FromArgb(110, 110, 110) }
+    $add = { param([string]$Text, $Font, $Color) $r.SelectionStart = $r.TextLength; $r.SelectionLength = 0; $r.SelectionFont = $Font; $r.SelectionColor = $Color; $r.AppendText($Text) }
+    $fs = @(); if ($Speed) { $fs = @($Speed.Findings | Where-Object { $_ }) }
+    if ($fs.Count) { & $add "What slows this PC down, most important first. Nothing has been changed.`n`n" $r.Font $grey }
+    else { & $add "Nothing found that slows this PC down.`n`n" $bold $script:Teal }
+    foreach ($f in $fs) {
+        & $add ("{0}   " -f $f.Impact.ToUpperInvariant()) $bold $tone[[string]$f.Impact]
+        & $add ("{0}`n" -f $f.Title) $bold $black
+        & $add ("{0}`n" -f $f.Found) $r.Font $grey
+        & $add ("What to do: {0}`n`n" -f $f.Fix) $r.Font $black
+    }
+    if ($Speed -and @($Speed.Good | Where-Object { $_ }).Count) { & $add ('Already good: ' + (@($Speed.Good) -join ', ') + '.') $r.Font $script:Teal }
+    $r.SelectionStart = 0; $r.SelectionLength = 0; $r.ScrollToCaret()
+    $ui.TabSpeed.Text = "Make it faster ($($fs.Count))"
 }
 
 function Show-TkUiInfo { param([string]$Text) [void][System.Windows.Forms.MessageBox]::Show($script:Ui.Form, $Text, 'StillGood', 'OK', 'Information') }
@@ -121,6 +148,7 @@ function Update-TkUiSummary {
     $t = "Clean apps will remove $($c.Remove) app$(if ($c.Remove -ne 1) { 's' }) and block $($c.Block) before they arrive"
     if (@($plan.Items | Where-Object { $_.Action -eq 'Setting' }).Count) { $t += ', and turn off OneDrive set-up for new users' }
     $ui.GroupsTitle.Text = "$t. Tick a group for all its apps, or tick and untick apps one by one."
+    $ui.TabApps.Text = "Clean apps ($($c.Remove))"
     Set-TkUiLayout
 }
 
@@ -145,10 +173,16 @@ function Update-TkUiScan {
     $ui.Info.Text = "$env:COMPUTERNAME  -  $($os.Caption) $($os.DisplayVersion) (build $($os.Build).$($os.Ubr))  -  administrator: $adm"
     $ui.Tips.SetToolTip($ui.Info, $ui.Info.Text)
     $v = $s.Readiness.Verdict
-    $colors = @{ Supported = @(227, 244, 230, 20, 92, 38); ProbablySupported = @(227, 244, 230, 20, 92, 38); UnsupportedButUpgradeable = @(255, 243, 214, 122, 75, 0); FixFirst = @(255, 243, 214, 122, 75, 0); NotUpgradeable = @(253, 227, 225, 138, 28, 18) }
+    # Green: meets the requirements. Calm blue: StillGood can upgrade it with the unsupported-hardware option.
+    # Orange: fix something first. Red: Windows 11 cannot run.
+    $colors = @{ Supported = @(227, 244, 230, 20, 92, 38); ProbablySupported = @(227, 244, 230, 20, 92, 38); UnsupportedButUpgradeable = @(228, 240, 251, 16, 70, 120); FixFirst = @(255, 243, 214, 122, 75, 0); NotUpgradeable = @(253, 227, 225, 138, 28, 18) }
     $c = $colors[$v]
     $ui.Verdict.BackColor = [System.Drawing.Color]::FromArgb($c[0], $c[1], $c[2]); $ui.Verdict.ForeColor = [System.Drawing.Color]::FromArgb($c[3], $c[4], $c[5])
-    $ui.Verdict.Text = "Windows 11: $($s.Readiness.Summary)"
+    $t = [string]$s.Readiness.Summary
+    if ($v -eq 'Supported' -or $v -eq 'ProbablySupported') { $t = "Windows 11: $t" }
+    if ($v -eq 'FixFirst') { $t = 'Windows 11: fix this first, then this PC can be upgraded: ' + (@($s.Readiness.Fixable) -join '; ') + '.' }
+    if ($v -eq 'NotUpgradeable') { $t = "Windows 11 can't run on this PC: " + (@($s.Readiness.Blockers) -join '; ') + '.' }
+    $ui.Verdict.Text = $t
     # The tree: every group, every app in it, each with its own tick, as the plan starts them.
     $ui.Syncing = $true
     $ui.Tree.BeginUpdate(); $ui.Tree.Nodes.Clear()
@@ -166,6 +200,7 @@ function Update-TkUiScan {
     $ui.Tree.EndUpdate()
     $ui.Syncing = $false
     $ui.ReportLink.Enabled = $true
+    Show-TkUiSpeed (Get-TkProp $s 'Speed')
     if ($ui.Tree.Nodes.Count) { Update-TkUiSummary }
     else { $ui.GroupsTitle.Text = 'Nothing to remove: the apps StillGood knows are already gone from this PC.'; Set-TkUiLayout }
 }
@@ -185,6 +220,8 @@ function Start-TkUiScan {
 function Start-TkUiClean {
     $ui = $script:Ui
     if (-not $ui.Scan) { $ui.Then = { Start-TkUiClean }; Start-TkUiScan; return }
+    # Show the list first, so nobody confirms without seeing what goes.
+    if ($ui.Tabs.SelectedTab -ne $ui.TabApps) { $ui.Tabs.SelectedTab = $ui.TabApps; [System.Windows.Forms.Application]::DoEvents() }
     $plan = Get-TkUiTrimmedPlan
     if (-not ($plan.Counts.Remove + $plan.Counts.Block + @($plan.Items | Where-Object { $_.Action -eq 'Setting' }).Count)) { Show-TkUiInfo 'Nothing to remove: nothing is ticked, or these apps are already gone.'; return }
     $msg = "Clean apps will remove $($plan.Counts.Remove) apps for every user and for new users, block $($plan.Counts.Block) from coming back, and change $(@($plan.Settings).Count) settings so they stay away.`r`n`r`nEvery change is written to an undo file.`r`n`r`nClean apps now?"
@@ -261,7 +298,7 @@ function Start-TkUiUpgrade {
     if (-not $cfg) { return }
     $unsupported = $false
     if ($rd.Verdict -eq 'UnsupportedButUpgradeable') {
-        $m = "This PC fails Microsoft's hardware check:`r`n- " + (@($rd.Bypassable) -join "`r`n- ") + "`r`n`r`nStillGood can still upgrade it with the unsupported-hardware option. Microsoft does not support Windows 11 on this hardware and does not guarantee updates for it. The decision is yours.`r`n`r`nUpgrade anyway?"
+        $m = "This PC doesn't pass Microsoft's hardware check:`r`n- " + (@($rd.Bypassable) -join "`r`n- ") + "`r`n`r`nStillGood can still upgrade it with the unsupported-hardware option. Microsoft does not support Windows 11 on this hardware and does not guarantee updates for it. The decision is yours.`r`n`r`nUpgrade anyway?"
         if (-not (Confirm-TkUi $m 'Warning')) { return }
         $unsupported = $true
     }
@@ -408,7 +445,19 @@ function Show-TkWindow {
     $ui.Tree.Add_AfterCheck({ param($sender, $e) Sync-TkUiTicks $e.Node })
     $never = New-TkCtl Label 'Never removed: Windows itself, Windows Security, Edge, App Installer, runtimes, languages, driver apps and your own software.' 16 366 400 40; $never.ForeColor = [System.Drawing.Color]::Gray
     $ui.Never = $never
-    $main.Controls.AddRange(@($ui.Info, $ui.Verdict, $ui.GroupsTitle, $ui.Tree, $never))
+    # Two tabs under the verdict: what would make this PC faster, and the apps Clean apps removes.
+    $ui.Tabs = New-Object System.Windows.Forms.TabControl
+    $ui.TabSpeed = New-Object System.Windows.Forms.TabPage; $ui.TabSpeed.Text = 'Make it faster'; $ui.TabSpeed.BackColor = [System.Drawing.Color]::White
+    $ui.TabSpeed.Padding = New-Object System.Windows.Forms.Padding(10, 8, 4, 4)
+    $ui.TabApps = New-Object System.Windows.Forms.TabPage; $ui.TabApps.Text = 'Clean apps'; $ui.TabApps.BackColor = [System.Drawing.Color]::White
+    $ui.Speed = New-Object System.Windows.Forms.RichTextBox
+    $ui.Speed.ReadOnly = $true; $ui.Speed.BorderStyle = 'None'; $ui.Speed.BackColor = [System.Drawing.Color]::White; $ui.Speed.Dock = 'Fill'; $ui.Speed.DetectUrls = $false
+    $ui.Speed.Font = New-Object System.Drawing.Font('Segoe UI', 9.75); $ui.Speed.Text = 'Checking this PC ...'
+    $ui.TabSpeed.Controls.Add($ui.Speed)
+    $ui.TabApps.Controls.AddRange(@($ui.GroupsTitle, $ui.Tree, $never))
+    $ui.Tabs.TabPages.AddRange(@($ui.TabSpeed, $ui.TabApps))
+    $ui.TabApps.Add_Resize({ Set-TkUiLayout })
+    $main.Controls.AddRange(@($ui.Info, $ui.Verdict, $ui.Tabs))
     $main.Add_Resize({ Set-TkUiLayout })
 
     $f.Controls.AddRange(@($main, $bottom, $left, $head))
