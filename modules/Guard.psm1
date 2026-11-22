@@ -44,6 +44,8 @@ $script:RegistryAllow = @(
        Names = @('SilentInstalledAppsEnabled', 'PreInstalledAppsEnabled', 'PreInstalledAppsEverEnabled', 'OemPreInstalledAppsEnabled',
                  'SystemPaneSuggestionsEnabled', 'SubscribedContent-338388Enabled') },
     @{ Key = 'HKU\*\Software\Microsoft\Windows\CurrentVersion\Run'; Names = @('OneDriveSetup') },
+    @{ Key = 'HKU\*\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'; Names = @('OneDrive') },
+    @{ Key = 'HKLM\SOFTWARE\Policies\Microsoft\Edge'; Names = @('StartupBoostEnabled', 'BackgroundModeEnabled') },
     @{ Key = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent'; Names = @('DisableWindowsConsumerFeatures') },
     @{ Key = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned\*'; Names = @() },
     @{ Key = 'HKLM\SYSTEM\Setup\MoSetup'; Names = @('AllowUpgradesWithUnsupportedTPMOrCPU') }

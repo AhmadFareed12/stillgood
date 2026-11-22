@@ -12,6 +12,7 @@ $script:GroupTitles = [ordered]@{
     communication = 'Mail and chat'
     store = 'Microsoft Store'
     tools = 'Tools'
+    startup = 'Faster start-up'
     newusers = 'For new users'
 }
 
@@ -35,7 +36,7 @@ function Get-TkChoiceText {
     param($Item)
     switch ($Item.Choice) {
         'Block' { return "$($Item.Title)  (not on this PC: blocked before it arrives)" }
-        'Setting' { return "$($Item.Title)  (turned off; existing users keep theirs)" }
+        'Setting' { return "$($Item.Title)  ($($Item.Hint))" }
         default { return [string]$Item.Title }
     }
 }

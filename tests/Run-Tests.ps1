@@ -64,6 +64,10 @@ It 'allows only the listed registry settings' {
     Assert-TkRegistryWrite -Path 'HKLM:\SYSTEM\Setup\MoSetup' -Name 'AllowUpgradesWithUnsupportedTPMOrCPU'
     Should-Throw { Assert-TkRegistryWrite -Path 'HKU\S-1-5-21-1-1001\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' -Name 'RotatingLockScreenEnabled' } '*not on the toolkit*'
     Should-Throw { Assert-TkRegistryWrite -Path 'HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' -Name 'SilentInstalledAppsEnabled' } '*not on the toolkit*'
+    Assert-TkRegistryWrite -Path 'HKLM\SOFTWARE\Policies\Microsoft\Edge' -Name 'StartupBoostEnabled'
+    Assert-TkRegistryWrite -Path 'HKU\S-1-5-21-1-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' -Name 'OneDrive'
+    Should-Throw { Assert-TkRegistryWrite -Path 'HKLM\SOFTWARE\Policies\Microsoft\Edge' -Name 'SmartScreenEnabled' } '*not on the toolkit*'
+    Should-Throw { Assert-TkRegistryWrite -Path 'HKU\S-1-5-21-1-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' -Name 'SecurityHealth' } '*not on the toolkit*'
 }
 It 'refuses security, update and licensing settings' {
     Should-Throw { Assert-TkRegistryWrite -Path 'HKLM\SOFTWARE\Policies\Microsoft\Windows Defender' -Name 'DisableAntiSpyware' } '*security*'
@@ -139,6 +143,36 @@ It 'starts from the defaults: an office PC keeps its everyday tools' {
     Should-Be (Get-PlanItem $plan 'Microsoft.Copilot').Action 'Block' 'Copilot ahead'
     Should-Be (Get-PlanItem $plan 'Microsoft.OutlookForWindows').Action 'Skip' 'Outlook (new) is offered, not blocked'
     Should-BeFalse (@($plan.Settings | Where-Object { $_.Name -eq 'OneDriveSetup' }).Count) 'OneDrive still set up for new users'
+    Should-BeTrue (Get-PlanItem $plan 'Startup.EdgePreload').Selected 'Edge preloading off by default'
+    Should-BeTrue (Get-PlanItem $plan 'Startup.OneDriveSignIn').Selected 'OneDrive at sign-in off by default (for non-users)'
+    Should-BeTrue (@($plan.Settings | Where-Object { $_.Name -eq 'StartupBoostEnabled' -and $_.Scope -eq 'Machine' }).Count) 'Edge policy in the plan'
+    Should-BeTrue (@($plan.Settings | Where-Object { $_.Name -eq 'OneDrive' -and $_.Condition -eq 'NoOneDrive' }).Count) 'OneDrive mark only where it is not used'
+}
+It 'turns OneDrive off at sign-in only for people who do not use it, never for new users, and undoes it' {
+    $inv = New-StandardPc
+    $plan = New-TkCleanPlan -Inventory $inv -Catalog $catalog
+    $undo = New-Object System.Collections.ArrayList
+    $null = Invoke-TkApplySettings -Settings @($plan.Settings) -Undo $undo -OneDriveStates @{ 'S-1-5-21-1-1001' = 'Uses'; 'S-1-5-21-1-1002' = 'NotUsed' }
+    Should-BeTrue (Test-Called 'RegSet HKU\TK_S-1-5-21-1-1002\*StartupApproved\Run\OneDrive=*') 'off at sign-in for ben (no OneDrive folder)'
+    Should-BeFalse (Test-Called 'RegSet HKU\S-1-5-21-1-1001\*StartupApproved*') 'ana uses OneDrive: untouched'
+    Should-BeFalse (Test-Called 'RegSet HKU\TK_Default\*StartupApproved*') 'new users: untouched'
+    Should-BeTrue (Test-Called 'RegSet HKLM\SOFTWARE\POLICIES\MICROSOFT\EDGE\StartupBoostEnabled=0') 'Edge: no startup boost'
+    Should-BeTrue (Test-Called 'RegSet HKLM\SOFTWARE\POLICIES\MICROSOFT\EDGE\BackgroundModeEnabled=0') 'Edge: nothing left running after closing'
+    $u = Undo-TkRegistry -Records @($undo)
+    Should-Be $u.Failed 0 'undo errors'
+    Should-BeTrue (Test-Called 'RegDeleteValue HKU\TK_S-1-5-21-1-1002\*StartupApproved\Run\OneDrive') 'undo removes the mark'
+    Should-BeTrue (Test-Called 'RegDeleteValue HKLM\SOFTWARE\POLICIES\MICROSOFT\EDGE\StartupBoostEnabled') 'undo removes the Edge policy'
+}
+It 'keeps OneDrive starting for someone signed in to it, even with no files in the profile folder' {
+    $inv = New-StandardPc
+    $plan = New-TkCleanPlan -Inventory $inv -Catalog $catalog
+    # ben keeps OneDrive on another drive: no files in his profile folder, but signed in.
+    $global:Fake.Reg[(Get-FakeKey 'HKU\TK_S-1-5-21-1-1002\Software\Microsoft\OneDrive\Accounts\Business1')] = @{ UserFolder = @{ Value = 'D:\OneDrive - Contoso'; Kind = 'String' }; UserEmail = @{ Value = 'ben@contoso.example'; Kind = 'String' } }
+    # ana never signed in, but Windows 11 writes a folder path for every user anyway (seen in the lab): that is not a sign-in.
+    $global:Fake.Reg[(Get-FakeKey 'HKU\S-1-5-21-1-1001\Software\Microsoft\OneDrive\Accounts\Personal')] = @{ UserFolder = @{ Value = 'C:\Users\ana\OneDrive'; Kind = 'String' } }
+    $null = Invoke-TkApplySettings -Settings @($plan.Settings) -Undo (New-Object System.Collections.ArrayList) -OneDriveStates @{ 'S-1-5-21-1-1001' = 'NotUsed'; 'S-1-5-21-1-1002' = 'NotUsed' }
+    Should-BeFalse (Test-Called 'RegSet HKU\TK_S-1-5-21-1-1002\*StartupApproved*') 'ben is signed in: untouched'
+    Should-BeTrue (Test-Called 'RegSet HKU\S-1-5-21-1-1001\*StartupApproved\Run\OneDrive=*') 'ana uses nothing: off at sign-in'
 }
 It 'ticks everything for a kiosk or a till with -Include all' {
     $plan = New-TkCleanPlan -Inventory (New-StandardPc) -Catalog $catalog -Include 'all'
@@ -523,6 +557,7 @@ It 'shows every choice in its group, and the ticks decide the plan' {
     Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'gaming' -and $_.Selected -eq $_.Total }).Count) 'Xbox and games ticked'
     Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'ai' -and @($_.Items | Where-Object { $_.Choice -eq 'Block' }).Count }).Count) 'Copilot offered as blocked ahead'
     Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'newusers' }).Count) 'the OneDrive setting is a choice too'
+    Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'startup' -and $_.Selected -eq 2 -and $_.Total -eq 2 }).Count) 'faster start-up: both ticked'
     # In the window: untick Xbox, tick Calculator, leave the rest as it starts.
     $on = @(@($plan.Items | Where-Object { $_.Selected -and $_.Name -ne 'Microsoft.GamingApp' } | ForEach-Object { $_.Name }) + 'Microsoft.WindowsCalculator')
     $trim = Select-TkPlanItems -Plan $plan -Selected $on

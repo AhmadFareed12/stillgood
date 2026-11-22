@@ -76,6 +76,7 @@ function Get-RegSnap {
     $o = [ordered]@{}
     foreach ($n in 'SilentInstalledAppsEnabled', 'SystemPaneSuggestionsEnabled') { $o[$n] = (Get-ItemProperty -LiteralPath $key -Name $n -ErrorAction SilentlyContinue).$n }
     $o['Policy'] = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent' -Name DisableWindowsConsumerFeatures -ErrorAction SilentlyContinue).DisableWindowsConsumerFeatures
+    $o['EdgeBoost'] = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name StartupBoostEnabled -ErrorAction SilentlyContinue).StartupBoostEnabled
     $o['Hive'] = $(if ($mounted) { 'profile file' } else { 'signed in' })
     if ($mounted) {
         for ($i = 0; $i -lt 5; $i++) {
@@ -165,6 +166,7 @@ try {
     $reg = Get-RegSnap
     Step 'stay-clean settings applied' ($reg.SilentInstalledAppsEnabled -eq 0 -and $reg.Policy -eq 1) ("user ({0}): SilentInstalledAppsEnabled={1}; consumer-features policy={2}" -f $reg.Hive, (Show $reg.SilentInstalledAppsEnabled), (Show $reg.Policy))
     Step 'Copilot blocked before it arrives' (Test-Path $deprov) 'Deprovisioned marker present'
+    Step 'Edge does not preload itself' ($reg.EdgeBoost -eq 0) ("Edge policy StartupBoostEnabled={0}" -f (Show $reg.EdgeBoost))
     $null = & reg.exe load 'HKU\SBXTEST' 'C:\Users\Default\NTUSER.DAT' 2>&1
     $silent = (Get-ItemProperty 'Registry::HKEY_USERS\SBXTEST\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' -Name SilentInstalledAppsEnabled -ErrorAction SilentlyContinue).SilentInstalledAppsEnabled
     $ods = (Get-ItemProperty 'Registry::HKEY_USERS\SBXTEST\Software\Microsoft\Windows\CurrentVersion\Run' -Name OneDriveSetup -ErrorAction SilentlyContinue).OneDriveSetup
@@ -184,8 +186,8 @@ try {
 try {
     $r = Invoke-Tk @('-Mode', 'Undo', '-UndoFile', $firstUndo, '-Apply', '-Yes') '6-undo.txt'
     $reg = Get-RegSnap
-    $same = ($reg.SilentInstalledAppsEnabled -eq $regBefore.SilentInstalledAppsEnabled) -and ($reg.SystemPaneSuggestionsEnabled -eq $regBefore.SystemPaneSuggestionsEnabled) -and ($reg.Policy -eq $regBefore.Policy)
-    Step 'undo puts the settings back' ($r.Code -eq 0 -and $same) ("exit {0}; before: {1}/{2}/{3}, after undo: {4}/{5}/{6}" -f $r.Code, (Show $regBefore.SilentInstalledAppsEnabled), (Show $regBefore.SystemPaneSuggestionsEnabled), (Show $regBefore.Policy), (Show $reg.SilentInstalledAppsEnabled), (Show $reg.SystemPaneSuggestionsEnabled), (Show $reg.Policy))
+    $same = ($reg.SilentInstalledAppsEnabled -eq $regBefore.SilentInstalledAppsEnabled) -and ($reg.SystemPaneSuggestionsEnabled -eq $regBefore.SystemPaneSuggestionsEnabled) -and ($reg.Policy -eq $regBefore.Policy) -and ($reg.EdgeBoost -eq $regBefore.EdgeBoost)
+    Step 'undo puts the settings back' ($r.Code -eq 0 -and $same) ("exit {0}; before: {1}/{2}/{3}/{4}, after undo: {5}/{6}/{7}/{8}" -f $r.Code, (Show $regBefore.SilentInstalledAppsEnabled), (Show $regBefore.SystemPaneSuggestionsEnabled), (Show $regBefore.Policy), (Show $regBefore.EdgeBoost), (Show $reg.SilentInstalledAppsEnabled), (Show $reg.SystemPaneSuggestionsEnabled), (Show $reg.Policy), (Show $reg.EdgeBoost))
     Step 'undo lifts the blocks' (-not (Test-Path $deprov)) 'Copilot marker removed'
 } catch { Step 'undo' $false $_.Exception.Message }
 

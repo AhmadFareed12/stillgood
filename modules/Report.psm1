@@ -100,7 +100,8 @@ function ConvertTo-TkReportHtml {
         Put '<h3>Settings that keep the PC clean</h3><table><tr><th>Where</th><th>Setting</th><th>New value</th><th>Why</th></tr>'
         foreach ($s in @($p.Settings)) {
             $where = @{ Users = 'Every user and new users'; Machine = 'This PC'; NewUsers = 'New users only' }[$s.Scope]
-            $val = $s.Value; if ($s.Kind -eq 'Delete') { $val = '(removed)' }
+            if ((Get-TkProp $s 'Condition') -eq 'NoOneDrive') { $where = 'Users who do not use OneDrive' }
+            $val = $s.Value; if ($s.Kind -eq 'Delete') { $val = '(removed)' } elseif ($s.Kind -eq 'Binary') { $val = 'off at sign-in' }
             Put "<tr><td>$(Esc $where)</td><td><code>$(Esc $s.Name)</code></td><td>$(Esc $val)</td><td>$(Esc $s.Why)</td></tr>"
         }
         Put '</table>'
@@ -115,7 +116,7 @@ function ConvertTo-TkReportHtml {
     if (@($Report.OneDrive).Count) {
         Put '<h2>OneDrive</h2><p>Clean apps never removes OneDrive for anyone who has a profile on this PC.</p><table><tr><th>Profile</th><th>OneDrive</th></tr>'
         foreach ($o in @($Report.OneDrive)) {
-            $t = @{ Uses = 'Keeps files in OneDrive'; NotUsed = 'No OneDrive folder'; Unknown = 'Could not check (run as administrator)' }[$o.State]
+            $t = @{ Uses = 'Keeps files in OneDrive'; NotUsed = 'No files in OneDrive'; Unknown = 'Could not check (run as administrator)' }[$o.State]
             Put "<tr><td>$(Esc $o.Profile)</td><td>$(Esc $t)</td></tr>"
         }
         Put '</table>'

@@ -146,7 +146,8 @@ function Update-TkUiSummary {
     $plan = Get-TkUiTrimmedPlan
     $c = $plan.Counts
     $t = "Clean apps will remove $($c.Remove) app$(if ($c.Remove -ne 1) { 's' }) and block $($c.Block) before they arrive"
-    if (@($plan.Items | Where-Object { $_.Action -eq 'Setting' }).Count) { $t += ', and turn off OneDrive set-up for new users' }
+    $sets = @($plan.Items | Where-Object { $_.Action -eq 'Setting' }).Count
+    if ($sets) { $t += ", and turn off $sets thing$(if ($sets -ne 1) { 's' }) that slow$(if ($sets -eq 1) { 's' }) the start-up" }
     $ui.GroupsTitle.Text = "$t. Tick a group for all its apps, or tick and untick apps one by one."
     $ui.TabApps.Text = "Clean apps ($($c.Remove))"
     Set-TkUiLayout

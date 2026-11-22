@@ -55,7 +55,7 @@ function Set-TkRegValue {
 
 function Invoke-TkApplySettings {
     # Applies the clean-apps settings to this PC, every user profile and the default profile. Adds undo records to $Undo.
-    param([object[]]$Settings, [System.Collections.ArrayList]$Undo)
+    param([object[]]$Settings, [System.Collections.ArrayList]$Undo, [hashtable]$OneDriveStates)
     $changed = 0; $failed = 0
     foreach ($s in @($Settings | Where-Object { $_.Scope -eq 'Machine' })) {
         try {
@@ -65,10 +65,30 @@ function Invoke-TkApplySettings {
     }
     $forUsers = @($Settings | Where-Object { $_.Scope -eq 'Users' })
     $forNew = @($Settings | Where-Object { $_.Scope -eq 'NewUsers' })
+    # A setting with Condition 'NoOneDrive' is only for people who do not use OneDrive: no files in their OneDrive folder
+    # (checked here) and not signed in (checked below, once their registry is open). Everyone else, and any profile that
+    # could not be checked, keeps OneDrive starting. Never for the default profile (new users).
+    if (@($forUsers | Where-Object { (Get-TkProp $_ 'Condition') -eq 'NoOneDrive' }).Count -and -not $OneDriveStates) {
+        $OneDriveStates = @{}; foreach ($o in @(Get-TkOneDriveUsers)) { $OneDriveStates[[string]$o.Sid] = [string]$o.State }
+    }
     foreach ($h in @(Get-TkUserHives)) {
-        $apply = @($forUsers); if ($h.Kind -eq 'Default') { $apply += $forNew }
+        $apply = @($forUsers | Where-Object {
+                $cond = [string](Get-TkProp $_ 'Condition')
+                if (-not $cond) { $true }
+                elseif ($cond -eq 'NoOneDrive') { $h.Kind -eq 'User' -and $OneDriveStates.ContainsKey([string]$h.Sid) -and $OneDriveStates[[string]$h.Sid] -eq 'NotUsed' }
+                else { $false }
+            })
+        if ($h.Kind -eq 'User' -and @($forUsers | Where-Object { (Get-TkProp $_ 'Condition') -eq 'NoOneDrive' }).Count -and -not @($apply | Where-Object { (Get-TkProp $_ 'Condition') -eq 'NoOneDrive' }).Count) {
+            Write-TkLog "OneDrive keeps starting for $($h.Path): there are files in OneDrive there, or it could not be checked."
+        }
+        if ($h.Kind -eq 'Default') { $apply += $forNew }
         if (-not $apply.Count) { continue }
         try { Enter-TkHive $h } catch { $failed += $apply.Count; Write-TkLog "Skipped profile $($h.Path): $($_.Exception.Message)" 'Warn'; continue }
+        # Second check, with the profile's registry open: signed in to OneDrive (its folder may live anywhere) = keep it.
+        if (@($apply | Where-Object { (Get-TkProp $_ 'Condition') -eq 'NoOneDrive' }).Count -and (Test-TkOneDriveSignedIn $h.Root)) {
+            $apply = @($apply | Where-Object { (Get-TkProp $_ 'Condition') -ne 'NoOneDrive' })
+            Write-TkLog "OneDrive keeps starting for $($h.Path): signed in to OneDrive."
+        }
         $here = 0
         try {
             foreach ($s in $apply) {
@@ -102,7 +122,9 @@ function Undo-TkRegistry {
                 $key = $r.SubKey; if ($h) { $key = "$($h.Root)\$($r.SubKey)" }
                 try {
                     Assert-TkRegistryWrite -Path $key -Name $r.Name
-                    if ($r.Existed) { Invoke-TkSys 'RegSet' @($key, $r.Name, $r.OldValue, $r.OldKind) }
+                    $old = $r.OldValue
+                    if ([string]$r.OldKind -eq 'Binary') { $old = [byte[]]@($old) }   # read back from JSON as a list of numbers
+                    if ($r.Existed) { Invoke-TkSys 'RegSet' @($key, $r.Name, $old, $r.OldKind) }
                     else { Invoke-TkSys 'RegDeleteValue' @($key, $r.Name) }
                     $restored++
                 } catch { $failed++; Write-TkLog "Could not restore $key\$($r.Name): $($_.Exception.Message)" 'Warn' }
@@ -134,14 +156,33 @@ function Remove-TkDeprovisioned {
 
 function Get-TkOneDriveUsers {
     # Read-only: who keeps files in OneDrive on this PC. Nothing here changes OneDrive for anyone.
+    # A OneDrive folder alone means nothing: Windows 11 creates an empty one for every user (seen in the lab). It
+    # counts when it holds files (placeholders of files kept online count too).
     foreach ($p in @(Invoke-TkSys 'GetProfiles')) {
         $state = 'NotUsed'; $folders = @()
         try {
-            $folders = @(Get-ChildItem -LiteralPath $p.Path -Directory -Filter 'OneDrive*' -ErrorAction Stop | ForEach-Object { $_.Name })
-            if ($folders.Count) { $state = 'Uses' }
+            $dirs = @(Get-ChildItem -LiteralPath $p.Path -Directory -Filter 'OneDrive*' -ErrorAction Stop)
+            $folders = @($dirs | ForEach-Object { $_.Name })
+            foreach ($d in $dirs) {
+                if (@(Get-ChildItem -LiteralPath $d.FullName -Force -ErrorAction Stop | Where-Object { $_.Name -ne 'desktop.ini' } | Select-Object -First 1).Count) { $state = 'Uses' }
+            }
         } catch { $state = 'Unknown' }
         [pscustomobject]@{ Sid = $p.Sid; Profile = (Split-Path -Leaf $p.Path); State = $state; Folders = $folders }
     }
+}
+
+function Test-TkOneDriveSignedIn {
+    # True when the profile whose hive is open at $Root is signed in to OneDrive (a personal or work account),
+    # wherever its folder is. A signed-in account has an e-mail (and a personal one an id). A folder path alone means
+    # nothing: Windows 11 writes one for every user before anyone signs in (seen in the lab).
+    param([string]$Root)
+    foreach ($a in @('Personal') + @(1..9 | ForEach-Object { "Business$_" })) {
+        foreach ($n in 'UserEmail', 'cid') {
+            $v = Invoke-TkSys 'RegGet' @("$Root\Software\Microsoft\OneDrive\Accounts\$a", $n)
+            if ($v.Exists -and [string]$v.Value) { return $true }
+        }
+    }
+    return $false
 }
 
 Export-ModuleMember -Function *

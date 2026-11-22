@@ -7,7 +7,18 @@
 Set-StrictMode -Version 2.0
 
 $script:RemoveValues = @('default', 'optional', 'never')
-$script:NewUsersOneDrive = 'NewUsers.OneDriveSetup'   # the one choice that is a setting, not an app
+$script:NewUsersOneDrive = 'NewUsers.OneDriveSetup'
+$script:EdgePreload = 'Startup.EdgePreload'
+$script:OneDriveSignIn = 'Startup.OneDriveSignIn'
+# The choices that are settings, not apps. Only what the lab measured as a real gain that cannot break an app:
+# Edge preloading itself at sign-in (82 MB on a used Windows 11 PC) and OneDrive starting at sign-in for people who
+# don't use it (10 seconds of boot on an old Windows 11 PC). Services, telemetry and the usual tweaks were measured
+# too and left out: small or no gain, or a risk to other apps.
+$script:SettingChoices = @(
+    [pscustomobject]@{ name = $script:EdgePreload; title = 'Edge preloading itself at sign-in'; category = 'startup'; hint = 'Edge still opens normally'; on = $true; restore = 'Undo puts it back.' },
+    [pscustomobject]@{ name = $script:OneDriveSignIn; title = 'OneDrive starting at sign-in, for people who do not use it'; category = 'startup'; hint = 'nothing is removed'; on = $true; restore = 'Undo puts it back.' },
+    [pscustomobject]@{ name = $script:NewUsersOneDrive; title = 'OneDrive set-up for new users'; category = 'newusers'; hint = 'turned off; existing users keep theirs'; on = $false; restore = 'Undo puts it back.' }
+)
 
 function Get-TkCatalog {
     param([string]$Path)
@@ -42,7 +53,7 @@ function Get-TkRemoveDefault {
 function Get-TkGroupKeys {
     # The groups the window shows and -Include/-Exclude accept: the catalog's categories, plus newusers.
     param($Catalog)
-    return @(@(@($Catalog.apps) | ForEach-Object { [string](Get-TkProp $_ 'category') }) + @('newusers') | Where-Object { $_ } | Sort-Object -Unique)
+    return @(@(@($Catalog.apps) | ForEach-Object { [string](Get-TkProp $_ 'category') }) + @($script:SettingChoices | ForEach-Object { $_.category }) | Where-Object { $_ } | Sort-Object -Unique)
 }
 
 function Get-TkOrganization {
@@ -75,12 +86,23 @@ function Get-TkCleanSettings {
 }
 
 function Get-TkChoiceSettings {
-    # Settings that come with a ticked choice. Today one: no OneDrive set-up for new users.
+    # The settings behind the ticked setting choices. Each one is undone by Undo.
     param([string[]]$Selected = @())
-    if (@($Selected) -contains $script:NewUsersOneDrive) {
-        return @([pscustomobject]@{ Scope = 'NewUsers'; Key = 'Software\Microsoft\Windows\CurrentVersion\Run'; Name = 'OneDriveSetup'; Value = $null; Kind = 'Delete'; Why = 'New users on this PC do not get OneDrive set up. Existing users are not touched.' })
+    $out = @()
+    if (@($Selected) -contains $script:EdgePreload) {
+        $edge = 'HKLM\SOFTWARE\Policies\Microsoft\Edge'
+        $out += [pscustomobject]@{ Scope = 'Machine'; Key = $edge; Name = 'StartupBoostEnabled'; Value = 0; Kind = 'DWord'; Why = 'Edge no longer loads itself at sign-in (startup boost). It still opens normally, a moment slower the first time.' }
+        $out += [pscustomobject]@{ Scope = 'Machine'; Key = $edge; Name = 'BackgroundModeEnabled'; Value = 0; Kind = 'DWord'; Why = 'Nothing of Edge keeps running after it is closed.' }
     }
-    return @()
+    if (@($Selected) -contains $script:OneDriveSignIn) {
+        # Marked off the way Task Manager's Startup apps does it; OneDrive itself is not touched. Only for people who do
+        # not use OneDrive: no files in it and not signed in (see Invoke-TkApplySettings). Everyone else keeps it starting.
+        $out += [pscustomobject]@{ Scope = 'Users'; Condition = 'NoOneDrive'; Key = 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'; Name = 'OneDrive'; Value = ([byte[]](3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)); Kind = 'Binary'; Why = 'OneDrive does not start at sign-in for people who do not use it. Nothing is removed; Task Manager''s Startup apps can turn it back on.' }
+    }
+    if (@($Selected) -contains $script:NewUsersOneDrive) {
+        $out += [pscustomobject]@{ Scope = 'NewUsers'; Key = 'Software\Microsoft\Windows\CurrentVersion\Run'; Name = 'OneDriveSetup'; Value = $null; Kind = 'Delete'; Why = 'New users on this PC do not get OneDrive set up. Existing users are not touched.' }
+    }
+    return $out
 }
 
 function Get-TkRestoreHint {
@@ -96,17 +118,17 @@ function Get-TkRestoreHint {
 
 function New-TkPlanItem {
     param([string]$Name, $Entry, [string]$Action, [string]$Reason, $Packages, $Prov, [string]$Choice = '', [bool]$DefaultOn = $false)
-    $title = $Name; $category = ''; $store = $null; $family = $null; $note = ''
+    $title = $Name; $category = ''; $store = $null; $family = $null; $note = ''; $hint = ''
     if ($Entry) {
         $t = Get-TkProp $Entry 'title'; if ($t) { $title = $t }
         $category = [string](Get-TkProp $Entry 'category'); $store = Get-TkProp $Entry 'storeId'; $family = Get-TkProp $Entry 'family'
-        $note = [string](Get-TkProp $Entry 'note')
+        $note = [string](Get-TkProp $Entry 'note'); $hint = [string](Get-TkProp $Entry 'hint')
     }
     $pk = @($Packages | Where-Object { $_ })
     if ($pk.Count -and -not $family) { $family = [string](Get-TkProp $pk[0] 'PackageFamilyName') }
     $users = @($pk | ForEach-Object { @(Get-TkProp $_ 'Users') } | Where-Object { $_ } | Select-Object -Unique)
     return [pscustomobject]@{
-        Name = $Name; Title = $title; Category = $category; Action = $Action; Reason = $Reason; Note = $note
+        Name = $Name; Title = $title; Category = $category; Action = $Action; Reason = $Reason; Note = $note; Hint = $hint
         Choice = $Choice; DefaultOn = $DefaultOn; Selected = $false
         Installed = [bool]$pk.Count; Users = $users; FullNames = @($pk | ForEach-Object { $_.PackageFullName })
         Provisioned = [bool]@($Prov).Count; ProvisionedNames = @(@($Prov) | Where-Object { $_ } | ForEach-Object { $_.PackageName })
@@ -127,7 +149,8 @@ function Resolve-TkSelection {
     $known = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($a in @($Catalog.apps)) { [void]$known.Add([string]$a.name) }
     foreach ($g in @(Get-TkGroupKeys $Catalog)) { [void]$known.Add($g) }
-    [void]$known.Add($script:NewUsersOneDrive); [void]$known.Add('all')
+    foreach ($c in $script:SettingChoices) { [void]$known.Add($c.name) }
+    [void]$known.Add('all')
     foreach ($e in @(@($Include) + @($Exclude) | Where-Object { $_ })) {
         if (-not $known.Contains($e)) { throw "'$e' is not an app or a group StillGood knows. Groups: $((Get-TkGroupKeys $Catalog) -join ', '), or all. Apps: their package names, as the report shows them." }
     }
@@ -158,7 +181,7 @@ function Complete-TkPlan {
         switch ($i.Choice) {
             'Remove' { if ($on) { $i.Action = 'Remove'; $i.Reason = ("Ticked, so it is removed. " + $i.Note).Trim() } else { $i.Action = 'Keep'; $i.Reason = ("Not ticked, so it is kept. " + $i.Note).Trim() } }
             'Block' { if ($on) { $i.Action = 'Block'; $i.Reason = 'Not on this PC. Blocked so an upgrade or a feature update does not add it.' } else { $i.Action = 'Skip'; $i.Reason = 'Not on this PC, and not blocked.' } }
-            'Setting' { if ($on) { $i.Action = 'Setting'; $i.Reason = 'New users do not get OneDrive set up. Existing users are not touched.' } else { $i.Action = 'Skip'; $i.Reason = 'Not ticked.' } }
+            'Setting' { if ($on) { $i.Action = 'Setting'; $i.Reason = ("Ticked: " + $i.Title + " is turned off (" + $i.Hint + ").") } else { $i.Action = 'Skip'; $i.Reason = 'Not ticked.' } }
         }
     }
     $order = @{ Remove = 0; Block = 1; Setting = 2; Keep = 3; Unknown = 4; Protected = 5; Skip = 6 }
@@ -211,9 +234,8 @@ function New-TkCleanPlan {
         if (Test-TkProtected -Name $a.name) { continue }
         [void]$items.Add((New-TkPlanItem $a.name $a 'Skip' '' @() @() -Choice 'Block' -DefaultOn ($rd -eq 'default' -or $also -contains $a.name)))
     }
-    # One setting, offered like an app: no OneDrive set-up for new users (existing users are never touched).
-    $od = [pscustomobject]@{ title = 'OneDrive set-up for new users'; category = 'newusers'; restore = 'Undo puts it back.' }
-    [void]$items.Add((New-TkPlanItem $script:NewUsersOneDrive $od 'Skip' '' @() @() -Choice 'Setting' -DefaultOn $false))
+    # The settings, offered like apps (see $script:SettingChoices).
+    foreach ($c in $script:SettingChoices) { [void]$items.Add((New-TkPlanItem $c.name $c 'Skip' '' @() @() -Choice 'Setting' -DefaultOn ([bool]$c.on))) }
 
     $meta = [pscustomobject]@{ Created = (Get-Date).ToString('s'); Computer = $env:COMPUTERNAME; CatalogVersion = [string]$Catalog.version; Include = $Include; Exclude = $Exclude; OrganizationKeep = @($Organization.Keep) }
     $selected = Resolve-TkSelection -Choices @($items | Where-Object { $_.Choice }) -Include $Include -Exclude $Exclude -Catalog $Catalog
