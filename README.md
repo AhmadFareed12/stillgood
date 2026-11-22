@@ -25,14 +25,14 @@ This toolkit is for that team.
 - **Catalog-driven.** Only apps listed in [`catalog/apps.json`](catalog/apps.json) are ever removed. Unknown apps are kept and listed in the report.
 - **A protected list enforced in code** ([`modules/Guard.psm1`](modules/Guard.psm1)): runtimes and frameworks, the Windows shell, Start, Search and Settings, Windows Security, codecs, App Installer, languages and speech, driver companion apps, Edge and WebView2, anything Windows marks as a system component or non-removable, and your organization's own software. No catalog or switch can turn it off. The guard is checked when the plan is made, and again right before each removal.
 - **Never touches security.** The toolkit can write only to a short list of registry settings. Defender, the firewall, Windows Update, UAC, BitLocker and licensing are refused in code, even if the list were widened by mistake.
-- **Profiles, not one size.** The *office* profile keeps the everyday tools: Calculator, Photos, Snipping Tool, Paint, Notepad, Camera, Media Player, Teams, To Do, Quick Assist and the Store. The *kiosk* profile (kiosks and point of sale) removes everything a single-purpose PC doesn't need.
-- **OneDrive safety.** OneDrive is never removed for anyone who has a profile on the PC. On kiosks, only new users skip the OneDrive setup.
+- **You choose, app by app.** Every app StillGood can remove sits in a group (AI apps, news and extras, Xbox and games, retired apps, everyday tools, mail and chat, the Store...), each with its own tick: tick a group for all its apps, or untick one app to keep it. The defaults suit an office PC: the everyday tools (Calculator, Photos, Snipping Tool, Paint, Camera, Media Player, To Do, Quick Assist), Outlook, Teams and the Store start unticked. For a kiosk or a till, tick them.
+- **OneDrive safety.** OneDrive is never removed for anyone who has a profile on the PC. Turning off its set-up for new users is a choice of its own, unticked by default.
 - **Honest progress.** Time left is shown only where it can be measured: the download and the image check. During Setup, the monitor shows Setup's own reported percentage, whether Setup is working, and the last line of its log. There are no invented countdowns.
 - **Everything logged, everything undoable, safe to run again.** Each run writes a readable log, a machine log, the plan, the result and an undo file. A second run acts only on what is still there.
 - **Any Windows language.** The safety checks, file names and dates behave the same under every language and region setting; they're tested under Turkish, Thai, Saudi and Persian formats. Nothing depends on translated Windows messages, and the upgrade picks the image in each PC's own language.
 - **Lab before release.** See *Status* below.
 
-**Good to know.** When the last app that uses a shared runtime (the Windows App Runtime, for example) is removed, Windows removes that runtime by itself. StillGood never removes runtimes; they come back automatically with any app that needs them. On Windows 11 24H2 and later, removing an app for every user also removes it for new users, and StillGood checks again before its second step instead of reporting an error.
+**Good to know.** When the last app that uses a shared runtime (the Windows App Runtime, for example) is removed, Windows removes that runtime by itself. StillGood never removes runtimes; they come back automatically with any app that needs them. StillGood removes an app's new-user copy first, which takes every user's copy with it, then anything still installed. (On Windows 10 the other order fails at Windows' clean-up step; the lab caught it.)
 
 ## What it will not do
 
@@ -50,7 +50,7 @@ Requirements: Windows 10 version 2004 or later, or Windows 11, on 64-bit x64; Wi
 
 ![The StillGood window on a lab PC](docs/window.png)
 
-The left column lists the actions. In the middle you see the PC, its Windows 11 verdict, and the groups of apps Clean apps would remove; untick a group to keep it, and the list on the right shows exactly what will go. The log at the bottom shows what StillGood is doing. The upgrade is watched in a small window of its own, which you can leave open after closing the main one.
+The left column lists the actions. In the middle you see the PC, its Windows 11 verdict, and one list of every app Clean apps can remove, under its group, each with its own tick: tick a group for all its apps, or untick one app to keep it. The line above the list says exactly what will go. The log at the bottom shows what StillGood is doing. The upgrade is watched in a small window of its own, which you can leave open after closing the main one.
 
 **From a script, a terminal or an RMM tool:**
 
@@ -59,11 +59,15 @@ The left column lists the actions. In the middle you see the PC, its Windows 11 
 powershell -ExecutionPolicy Bypass -File .\StillGood.ps1
 
 # A read-only report (opens nothing, changes nothing)
-.\StillGood.ps1 -Mode Report -Profile kiosk
+.\StillGood.ps1 -Mode Report
 
 # Clean apps: preview, then apply
-.\StillGood.ps1 -Mode CleanApps -Profile office
-.\StillGood.ps1 -Mode CleanApps -Profile office -Apply
+.\StillGood.ps1 -Mode CleanApps
+.\StillGood.ps1 -Mode CleanApps -Apply
+
+# Change the defaults by group or by app (groups: ai, communication, consumer, everyday, gaming, newusers,
+# promoted, retired, store, tools; or all). A till: also the everyday tools and mail, but keep Calculator.
+.\StillGood.ps1 -Mode CleanApps -Include everyday,communication -Exclude Microsoft.WindowsCalculator -Apply
 
 # Upgrade: fill in config\upgrade.json first (see below)
 .\StillGood.ps1 -Mode Upgrade -Apply
@@ -78,14 +82,15 @@ powershell -ExecutionPolicy Bypass -File .\StillGood.ps1
 Run it as SYSTEM from your RMM tool (Action1, NinjaOne, Intune remediation, a GPO startup script), with `-Apply -Yes`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\StillGood.ps1 -Mode CleanApps -Profile kiosk -Apply -Yes
+powershell -ExecutionPolicy Bypass -File .\StillGood.ps1 -Mode CleanApps -Apply -Yes
+powershell -ExecutionPolicy Bypass -File .\StillGood.ps1 -Mode CleanApps -Include all -Apply -Yes   # a kiosk: everything StillGood knows
 ```
 
 **Exit codes:** `0` done · `1` failed (see the log) · `2` refused (a blocker or a safety rule) · `3` not confirmed · `10` preview only.
 
 **Logs and reports:** `%ProgramData%\StillGood\runs\<time>-<mode>\` holds `run.log`, `events.jsonl`, `report.html`, `report.json`, `plan.json`, `result.json` and `undo.json`. Undo files are also copied to `%ProgramData%\StillGood\undo\`.
 
-**Your organization's apps:** copy `catalog/organization.example.json` to `catalog/organization.json`. Its `keep` list protects your own software, or anything a profile would otherwise remove (wildcards allowed). It can only add protection. Its `alsoRemove` list removes extra catalog apps for one profile.
+**Your organization's apps:** copy `catalog/organization.example.json` to `catalog/organization.json`. Its `keep` list protects your own software, or anything you never want removed (wildcards allowed). It can only add protection. Its `alsoRemove` list makes extra catalog apps start ticked on every PC.
 
 **The Windows 11 images, one per language:** an in-place upgrade needs an image in the language the PC's Windows was installed in; a Hebrew PC needs the Hebrew image. Copy `config/upgrade.example.json` to `config/upgrade.json` and list an image for each language in your fleet, keyed like `en-US`, `he-IL` or `ar-SA`. `catalog/languages.json` lists all 38 languages Microsoft publishes and the names its download page uses. Each PC picks its own image. A PC whose language has no image is refused before anything changes, with a message naming the exact image to download. Download each image once from Microsoft's Windows 11 page ("Download Windows 11 Disk Image (ISO) for x64 devices"). Put it on a share or web server you control, and paste its SHA-256 from the same Microsoft page ("Verify your download"). Microsoft's own links expire after 24 hours. The pinned SHA-256 guarantees that every PC gets Microsoft's exact image. If a download stalls, the PC waits for the image in `%ProgramData%\StillGood\upgrade\drop\`, where a READ ME says exactly which file to put there.
 
@@ -112,7 +117,7 @@ modules/
   Upgrade.psm1         image download/copy, SHA-256, drop folder, Setup command line, state
   UpgradeJob.psm1      the background upgrade, the after-upgrade check, the monitor
 worker/                the two scheduled-task entry points
-catalog/apps.json      every app the toolkit knows, and what each profile does with it
+catalog/apps.json      every app the toolkit knows, its group, and whether it starts ticked
 tests/                 offline tests with a fake PC, and the Windows Sandbox integration test
 ```
 
@@ -127,7 +132,7 @@ The tests run against a fake PC: fake apps, users, registry, Setup and scheduled
 - the safety rules;
 - readiness verdicts and processor detection;
 - catalog validation;
-- office and kiosk plans and the organization file;
+- the default choices, -Include and -Exclude, the window's ticks, and the organization file;
 - removal for every user and new users;
 - profile hives (signed-in, signed-out and default);
 - re-runs, failures and forged plans;
@@ -147,21 +152,21 @@ The window itself is tested by hand on a lab VM: it is opened with `StillGood.cm
 **v0.3, preview.** All three blocks are built and lab-proven, including the full upgrade from Windows 10 with its restarts. Still a preview: one lab, English Windows, no fleet yet.
 
 **Proven in the lab (2026-11-22):**
-- **47 offline tests** against a fake PC (`tests/Run-Tests.ps1`).
+- **49 offline tests** against a fake PC (`tests/Run-Tests.ps1`).
 - **The full upgrade from Windows 10, on a PC that fails Microsoft's hardware check.** A Windows 10 22H2 Pro VM with UEFI but no TPM, started as SYSTEM the way an RMM tool runs it, with `-AllowUnsupportedHardware`:
-  - Clean apps first (office profile): 23 apps removed, 27 blocked before they arrive, no errors;
+  - Clean apps first (the defaults): 23 apps removed, 27 blocked before they arrive, no errors;
   - the image copied and checked against its SHA-256, Setup's compatibility scan, Setup's restarts, and the first sign-in on Windows 11 26H2 (build 26300): 18 minutes in all;
   - afterwards the 8.4 GB image was deleted, StillGood's scheduled tasks were gone and the unsupported-hardware registry value was removed again;
   - none of the 27 apps came back with Windows 11, including Clipchamp and Dev Home, which a fresh 26H2 install adds for new users.
 - **The supported upgrade from Windows 10**, on the same Windows 10 22H2 with TPM 2.0 and Secure Boot, without the unsupported option: readiness "Supported", the same Clean apps result, Windows 11 26H2 in 16 minutes, then the image deleted, the tasks gone and none of the 27 apps back.
 - **Windows Sandbox**, real Windows (`tests/Integration-Test.ps1`): 13 of 13 checks. These cover the stay-clean settings for a signed-out user and new users, the blocks, a second run that changes nothing, and Undo putting every value back.
-- **A fresh Windows 11 26H2 Pro VM**, Hyper-V with a virtual TPM. Clean apps ran as SYSTEM with a user signed in, the way an RMM tool runs it, and passed 13 of 13 checks with the kiosk profile:
+- **A fresh Windows 11 26H2 Pro VM**, Hyper-V with a virtual TPM. Clean apps ran as SYSTEM with a user signed in, the way an RMM tool runs it, and passed 13 of 13 checks with everything ticked (`-Include all`):
   - 31 apps removed for every user and new users, and the run log shows no removal outside the plan;
   - all 75 kept and protected apps untouched;
   - the settings applied for the signed-in user, new users and the machine;
   - Copilot blocked before it arrives;
   - a second run changes nothing, and Undo restores every setting.
-- **Before and after on the same VM, office profile:** 16 apps removed and 18 blocked from coming back. Memory in use a minute after boot fell from 2,152 MB to 1,966 MB, and processes from 130 to 127. Boot time did not change (Windows' own measurement, one run each). On a new PC, StillGood buys control, not speed.
+- **Before and after on the same VM, with the defaults:** 16 apps removed and 18 blocked from coming back. Memory in use a minute after boot fell from 2,152 MB to 1,966 MB, and processes from 130 to 127. Boot time did not change (Windows' own measurement, one run each). On a new PC, StillGood buys control, not speed.
 - **Today's Windows 11 Setup accepts StillGood's exact command line,** including `/eula accept` and `/product server`. Both compatibility scans returned `0xC1900210` (no issues).
 
 **Found by the lab and fixed:** on Windows 10, removing an app for every user while it is still set up for new users fails at Windows' clean-up step (`0x80070002`), so every removal was reported as an error. StillGood now removes the new-user copy first, which takes every user's copy with it: no errors on Windows 10, 31 of 31 on Windows 11. The processor check also recognises Xeon E3/E5/E7 (v1 to v6) and the 2013-2016 Atom-class Celeron and Pentium as not on Microsoft's list; they used to show as unknown, which made the report say "probably supported".
@@ -170,7 +175,7 @@ The window itself is tested by hand on a lab VM: it is opened with `StillGood.cm
 
 **Still to prove before v1.0:**
 1. The download, stall and drop-folder paths (the lab VMs have no network), sign-out during Setup, and a forced rollback.
-2. The kiosk profile's blocks for Outlook (new) and Teams across an upgrade (the run above used the office profile, which keeps them), and Copilot's, which needs a networked VM: Copilot is not in the Windows 11 image.
+2. The blocks for Outlook (new) and Teams across an upgrade when they are ticked (the runs above used the defaults, which keep them), and Copilot's, which needs a networked VM: Copilot is not in the Windows 11 image.
 3. A new user signs in after cleaning, Windows Update and a later feature update run, and nothing returns.
 4. Reinstalling removed apps from the Store (needs a networked VM).
 5. Code signing, and pilot evidence from real PCs before any fleet claims.

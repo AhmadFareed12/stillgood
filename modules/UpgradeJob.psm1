@@ -83,7 +83,8 @@ function Invoke-TkAfterUpgrade {
             try {
                 $cat = Get-TkCatalog -Path (Join-Path $job.AppDir 'catalog\apps.json')
                 $org = Get-TkOrganization -Path ([string]$job.Organization) -Catalog $cat
-                $plan = New-TkCleanPlan -Inventory (Invoke-TkSys 'GetInventory') -Catalog $cat -Profile $job.Profile -Organization $org
+                # The same choices as before the upgrade: the defaults with this job's -Include and -Exclude.
+                $plan = New-TkCleanPlan -Inventory (Invoke-TkSys 'GetInventory') -Catalog $cat -Organization $org -Include @(Get-TkProp $job 'Include') -Exclude @(Get-TkProp $job 'Exclude')
                 $res = Invoke-TkCleanApps -Plan $plan -Apply
                 [void]$notes.Add("Clean apps on Windows 11: $($res.AppsRemoved) removed, $($res.Blocked) blocked.")
             } catch { [void]$notes.Add("Clean apps did not finish: $($_.Exception.Message)") }

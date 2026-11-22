@@ -9,9 +9,13 @@
 .EXAMPLE
     .\StillGood.ps1                                              # the menu
 .EXAMPLE
-    .\StillGood.ps1 -Mode Report -Profile kiosk                  # read-only report, no admin rights needed
+    .\StillGood.ps1 -Mode Report                                 # read-only report, no admin rights needed
 .EXAMPLE
-    .\StillGood.ps1 -Mode CleanApps -Profile office -Apply -Yes  # from an RMM tool or a script
+    .\StillGood.ps1 -Mode CleanApps -Apply -Yes                  # the defaults, from an RMM tool or a script
+.EXAMPLE
+    .\StillGood.ps1 -Mode CleanApps -Include everyday,communication -Exclude Microsoft.WindowsCalculator -Apply -Yes
+    # a till: also the everyday tools, mail and chat, but keep Calculator. Groups: ai, communication, consumer,
+    # everyday, gaming, newusers, promoted, retired, store, tools; or 'all'. Apps: their package names (see the report).
 .EXAMPLE
     .\StillGood.ps1 -Mode Upgrade -Config .\config\upgrade.json -Apply -Yes -AllowUnsupportedHardware
 .EXAMPLE
@@ -22,7 +26,8 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Window', 'Menu', 'Report', 'CleanApps', 'Upgrade', 'UpgradeAndClean', 'Monitor', 'Undo')][string]$Mode = 'Menu',
-    [Alias('Profile')][ValidateSet('office', 'kiosk')][string]$ProfileName = 'office',
+    [string[]]$Include = @(),
+    [string[]]$Exclude = @(),
     [switch]$Apply,
     [switch]$Yes,
     [switch]$AllowUnsupportedHardware,
@@ -55,12 +60,12 @@ function Test-TkPreviewOnly { return (-not $Apply -and $Mode -ne 'Menu') }
 
 function Invoke-TkReportMode {
     param([string]$RunName = 'report')
-    $run = New-TkRun -Name "$RunName-$ProfileName"
+    $run = New-TkRun -Name $RunName
     $inv = Get-TkInventory
     $ready = Get-TkWin11Readiness
     $cat = Get-TkCatalog
     $org = Get-TkOrganization -Path (Get-TkOrgPath) -Catalog $cat
-    $plan = New-TkCleanPlan -Inventory $inv -Catalog $cat -Profile $ProfileName -Organization $org
+    $plan = New-TkCleanPlan -Inventory $inv -Catalog $cat -Organization $org -Include $Include -Exclude $Exclude
     $rep = New-TkReport -Inventory $inv -Readiness $ready -Plan $plan -OneDrive @(Get-TkOneDriveUsers)
     $paths = Save-TkReport -Report $rep -Dir $run.Dir
     Write-TkReportSummary -Report $rep -Paths $paths
@@ -72,7 +77,7 @@ function Invoke-TkCleanMode {
     if (-not (Test-TkElevated)) { Write-Host '  Clean apps needs administrator rights: it changes apps for every user.' -ForegroundColor Yellow; return 2 }
     $r = Invoke-TkReportMode -RunName 'clean-apps'
     $c = $r.Plan.Counts
-    Write-Host ("  Clean apps ({0}) will remove {1} apps for every user and for new users, block {2} before they arrive, and set {3} settings. Every change is recorded for undo." -f $ProfileName, $c.Remove, $c.Block, @($r.Plan.Settings).Count)
+    Write-Host ("  Clean apps ({0}) will remove {1} apps for every user and for new users, block {2} before they arrive, and set {3} settings. Every change is recorded for undo." -f (Get-TkSelectionText $r.Plan), $c.Remove, $c.Block, @($r.Plan.Settings).Count)
     if (Test-TkPreviewOnly) { Write-Host '  Preview only. Add -Apply to make these changes.'; return 10 }
     if (-not (Confirm-Tk 'Make these changes now?')) { Write-Host '  Nothing was changed.'; return 3 }
     $res = Invoke-TkCleanApps -Plan $r.Plan -Apply
@@ -119,7 +124,7 @@ function Invoke-TkUpgradeMode {
         $res = Invoke-TkCleanApps -Plan $r.Plan -Apply
         Write-Host ("  Clean apps: {0} removed, {1} blocked, {2} with errors." -f $res.AppsRemoved, $res.Blocked, $res.Failed)
     }
-    $null = Start-TkUpgrade -Config $cfg -AllowUnsupported ([bool]$AllowUnsupportedHardware) -NoRestart ([bool]$NoRestart) -CleanAfter $CleanToo -Profile $ProfileName -OrganizationPath (Get-TkOrgPath)
+    $null = Start-TkUpgrade -Config $cfg -AllowUnsupported ([bool]$AllowUnsupportedHardware) -NoRestart ([bool]$NoRestart) -CleanAfter $CleanToo -Include @($r.Plan.Include) -Exclude @($r.Plan.Exclude) -OrganizationPath (Get-TkOrgPath)
     Write-Host '  The upgrade is running in the background. Watch it with: .\StillGood.ps1 -Mode Monitor' -ForegroundColor Green
     return 0
 }
@@ -149,7 +154,7 @@ function Show-TkMenu {
     while ($true) {
         Write-Host ''
         Write-Host "  $($p.Name) $($p.Version) - Windows 11 for the PCs you already have" -ForegroundColor Cyan
-        Write-Host "  Profile: $script:ProfileName   (P switches between office and kiosk)"
+        Write-Host '  Clean apps uses the defaults here. To choose app by app, open the window (StillGood.cmd).'
         Write-Host '  1  Report only (changes nothing)'
         Write-Host '  2  Clean apps'
         Write-Host '  3  Upgrade to Windows 11'
@@ -166,9 +171,8 @@ function Show-TkMenu {
                 '4' { $null = Invoke-TkUpgradeMode -CleanToo $true }
                 '5' { Show-TkUpgradeMonitor }
                 '6' { $null = Invoke-TkUndoMode }
-                'P' { if ($script:ProfileName -eq 'office') { $script:ProfileName = 'kiosk' } else { $script:ProfileName = 'office' } }
                 'Q' { return }
-                default { Write-Host '  Choose 1-6, P or Q.' }
+                default { Write-Host '  Choose 1-6 or Q.' }
             }
         } catch { Write-Host "  $($_.Exception.Message)" -ForegroundColor Red }
     }
@@ -180,7 +184,7 @@ try {
             # The window (what StillGood.cmd opens). It asks Windows for administrator rights first.
             if (-not (Test-TkElevated)) {
                 $ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-                $argLine = "-NoLogo -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File `"$PSCommandPath`" -Mode Window -Profile $ProfileName"
+                $argLine = "-NoLogo -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File `"$PSCommandPath`" -Mode Window"
                 try { Start-Process -FilePath $ps -ArgumentList $argLine -Verb RunAs -WindowStyle Hidden | Out-Null }
                 catch {
                     Add-Type -AssemblyName System.Windows.Forms
@@ -190,7 +194,7 @@ try {
             }
             Import-Module (Join-Path $PSScriptRoot 'modules\GuiCore.psm1') -Force -DisableNameChecking -Global
             Import-Module (Join-Path $PSScriptRoot 'modules\Gui.psm1') -Force -DisableNameChecking -Global
-            Show-TkWindow -Root $PSScriptRoot -Profile $ProfileName -OrgPath (Get-TkOrgPath)
+            Show-TkWindow -Root $PSScriptRoot -OrgPath (Get-TkOrgPath)
             exit 0
         }
         'Menu' {

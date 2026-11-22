@@ -1,4 +1,4 @@
-# Integration-Test.ps1 - the real-Windows test. It removes apps for real (kiosk profile), checks the result, runs again,
+# Integration-Test.ps1 - the real-Windows test. It removes apps for real (everything ticked: -Include all), checks the result, runs again,
 # then undoes the settings. It runs only on a throwaway machine:
 #   - Windows Sandbox (as SYSTEM):  lab\Invoke-SandboxTest.ps1 -ToolPath <this toolkit> -TestScript tests\Integration-Test.ps1
 #   - a lab VM marked C:\Lab.marker (as its signed-in admin):  lab\Invoke-LabTest.ps1 -Vm <vm> -ToolPath ... -TestScript ...
@@ -106,16 +106,16 @@ Step 'inventory before' ($before.Appx.Count -gt 0) ("{0} apps for users, {1} set
 # 3. The read-only report and its plan.
 $plan = $null
 try {
-    $r = Invoke-Tk @('-Mode', 'Report', '-Profile', 'kiosk') '3-report.txt'
-    $rep = Get-LatestRun '*-report-kiosk'
+    $r = Invoke-Tk @('-Mode', 'Report', '-Include', 'all') '3-report.txt'
+    $rep = Get-LatestRun '*-report'
     Copy-Item -LiteralPath (Join-Path $rep.FullName 'report.html') -Destination $ResultsDir
     Copy-Item -LiteralPath (Join-Path $rep.FullName 'report.json') -Destination $ResultsDir
     $plan = (Get-Content -LiteralPath (Join-Path $rep.FullName 'report.json') -Raw | ConvertFrom-Json).Plan
     $c = $plan.Counts
     $greg = (Get-Date).ToString('yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
     Step 'file stamps use the Gregorian calendar' ($rep.Name.StartsWith($greg)) "run folder: $($rep.Name)"
-    Step 'report (kiosk)' ($r.Code -eq 0) ("exit {0}; plan: {1} to remove, {2} to block, {3} kept, {4} unknown, {5} protected" -f $r.Code, $c.Remove, $c.Block, $c.Keep, $c.Unknown, $c.Protected)
-} catch { Step 'report (kiosk)' $false $_.Exception.Message }
+    Step 'report (everything ticked)' ($r.Code -eq 0) ("exit {0}; plan: {1} to remove, {2} to block, {3} kept, {4} unknown, {5} protected" -f $r.Code, $c.Remove, $c.Block, $c.Keep, $c.Unknown, $c.Protected)
+} catch { Step 'report (everything ticked)' $false $_.Exception.Message }
 if (-not $plan) { Finish }
 $toRemove = @($plan.Items | Where-Object { $_.Action -eq 'Remove' } | ForEach-Object { $_.Name })
 $mustStay = @($plan.Items | Where-Object { $_.Action -eq 'Protected' -or $_.Action -eq 'Unknown' -or $_.Action -eq 'Keep' } | ForEach-Object { $_.Name })
@@ -123,8 +123,8 @@ $mustStay = @($plan.Items | Where-Object { $_.Action -eq 'Protected' -or $_.Acti
 # 4. Clean apps for real.
 $firstUndo = $null
 try {
-    $r = Invoke-Tk @('-Mode', 'CleanApps', '-Profile', 'kiosk', '-Apply', '-Yes') '4-clean.txt'
-    $run = Get-LatestRun '*-clean-apps-kiosk'
+    $r = Invoke-Tk @('-Mode', 'CleanApps', '-Include', 'all', '-Apply', '-Yes') '4-clean.txt'
+    $run = Get-LatestRun '*-clean-apps'
     $firstUndo = Join-Path $run.FullName 'undo.json'
     Copy-Item -LiteralPath (Join-Path $run.FullName 'result.json') -Destination (Join-Path $ResultsDir '4-result.json')
     $after = Get-State
@@ -132,7 +132,7 @@ try {
     $left = @($toRemove | Where-Object { $after.Appx -contains $_ -or $after.Provisioned -contains $_ })
     $detail = "exit {0}; removed {1} of {2}" -f $r.Code, ($toRemove.Count - $left.Count), $toRemove.Count
     if ($left.Count) { $detail += "; still there: $($left -join ', ')" }
-    Step 'clean apps (kiosk)' ($r.Code -eq 0 -and -not $left.Count) $detail
+    Step 'clean apps (everything ticked)' ($r.Code -eq 0 -and -not $left.Count) $detail
     # Windows removes a shared runtime by itself once the last app using it is gone: list those, fail on anything else.
     $vanished = @($mustStay | Where-Object { $before.Appx -contains $_ -and $after.Appx -notcontains $_ })
     $retired = @($vanished | Where-Object { $before.Frameworks -contains $_ })
@@ -164,12 +164,12 @@ try {
     [GC]::Collect(); [GC]::WaitForPendingFinalizers()
     $null = & reg.exe unload 'HKU\SBXTEST' 2>&1
     Step 'new users (default profile)' ($silent -eq 0 -and -not $ods) ("SilentInstalledAppsEnabled={0}, OneDrive setup for new users: {1}" -f (Show $silent), $(if ($ods) { 'still there' } else { 'off' }))
-} catch { Step 'clean apps (kiosk)' $false $_.Exception.Message }
+} catch { Step 'clean apps (everything ticked)' $false $_.Exception.Message }
 
 # 5. Run again: it must find nothing left to do.
 try {
-    $r = Invoke-Tk @('-Mode', 'CleanApps', '-Profile', 'kiosk', '-Apply', '-Yes') '5-rerun.txt'
-    $res = Get-Content -LiteralPath (Join-Path (Get-LatestRun '*-clean-apps-kiosk').FullName 'result.json') -Raw | ConvertFrom-Json
+    $r = Invoke-Tk @('-Mode', 'CleanApps', '-Include', 'all', '-Apply', '-Yes') '5-rerun.txt'
+    $res = Get-Content -LiteralPath (Join-Path (Get-LatestRun '*-clean-apps').FullName 'result.json') -Raw | ConvertFrom-Json
     Step 'second run changes nothing' ($r.Code -eq 0 -and $res.AppsRemoved -eq 0 -and $res.SettingsChanged -eq 0) ("exit {0}; removed {1}, settings changed {2}" -f $r.Code, $res.AppsRemoved, $res.SettingsChanged)
 } catch { Step 'second run changes nothing' $false $_.Exception.Message }
 

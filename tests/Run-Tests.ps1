@@ -29,7 +29,7 @@ function New-StandardPc {
 function Get-PlanItem { param($Plan, [string]$Name) $i = @($Plan.Items | Where-Object { $_.Name -eq $Name }); if ($i.Count -ne 1) { throw "the plan has $($i.Count) items named $Name" }; return $i[0] }
 
 function New-TestJob {
-    param([bool]$AllowUnsupported = $false, [bool]$CleanAfter = $false)
+    param([bool]$AllowUnsupported = $false, [bool]$CleanAfter = $false, [string[]]$Include = @(), [string[]]$Exclude = @())
     $paths = Get-TkUpgradePaths
     if (Test-Path -LiteralPath $paths.Root) { Remove-Item -LiteralPath $paths.Root -Recurse -Force }
     New-Item -ItemType Directory -Path $paths.Download -Force | Out-Null
@@ -38,7 +38,7 @@ function New-TestJob {
     $cfg = [pscustomobject]@{ Source = $src; Sha256 = (Get-TkSha256 -Path $src); DynamicUpdate = $true; StallMinutes = 1; DropFolderWaitHours = 1 }
     $global:Fake.Download = { param($Source, $Destination, $OnProgress) Copy-Item -LiteralPath $Source -Destination $Destination -Force; & $OnProgress 8192 8192; [pscustomobject]@{ Ok = $true; Stalled = $false; Error = '' } }
     $global:Fake.Files['X:\setup.exe'] = $true
-    $job = [pscustomobject]@{ Created = (Get-Date).ToString('s'); StartBuild = 19045; Config = $cfg; AllowUnsupported = $AllowUnsupported; NoRestart = $false; CleanAfter = $CleanAfter; Profile = 'office'; Organization = $null; AppDir = $root }
+    $job = [pscustomobject]@{ Created = (Get-Date).ToString('s'); StartBuild = 19045; Config = $cfg; AllowUnsupported = $AllowUnsupported; NoRestart = $false; CleanAfter = $CleanAfter; Include = @($Include); Exclude = @($Exclude); Organization = $null; AppDir = $root }
     Save-TkJson $job $paths.Job
     return $paths
 }
@@ -109,19 +109,22 @@ It 'turns the checks into one honest verdict' {
 }
 
 Write-Host ''; Write-Host 'Catalog and plans' -ForegroundColor Cyan
-It 'loads the shipped catalog' { Should-BeTrue (@($catalog.apps).Count -gt 40) 'catalog size'; Should-BeTrue ((Get-TkProfileNames $catalog) -contains 'kiosk') 'kiosk profile' }
-It 'rejects catalogs with wildcards or duplicates' {
+It 'loads the shipped catalog' { Should-BeTrue (@($catalog.apps).Count -gt 40) 'catalog size'; Should-BeTrue ((Get-TkGroupKeys $catalog) -contains 'everyday') 'everyday tools group' }
+It 'rejects catalogs with wildcards, duplicates or an unknown remove value' {
     $bad = Join-Path $tmp 'bad.json'
-    Set-Content -LiteralPath $bad -Value '{"version":"1","profiles":{"office":"x"},"apps":[{"name":"Microsoft.*","title":"x","remove":["office"]}]}'
+    Set-Content -LiteralPath $bad -Value '{"version":"1","apps":[{"name":"Microsoft.*","title":"x","remove":"default"}]}'
     Should-Throw { Get-TkCatalog -Path $bad } '*wildcards*'
-    Set-Content -LiteralPath $bad -Value '{"version":"1","profiles":{"office":"x"},"apps":[{"name":"A","title":"x","remove":["office"]},{"name":"a","title":"y","remove":[]}]}'
+    Set-Content -LiteralPath $bad -Value '{"version":"1","apps":[{"name":"A","title":"x","remove":"default"},{"name":"a","title":"y","remove":"never"}]}'
     Should-Throw { Get-TkCatalog -Path $bad } '*twice*'
+    Set-Content -LiteralPath $bad -Value '{"version":"1","apps":[{"name":"A","title":"x","remove":["office"]}]}'
+    Should-Throw { Get-TkCatalog -Path $bad } '*default, optional or never*'
 }
-It 'plans an office PC' {
+It 'starts from the defaults: an office PC keeps its everyday tools' {
     Reset-TkKeepPatterns
-    $plan = New-TkCleanPlan -Inventory (New-StandardPc) -Catalog $catalog -Profile 'office'
+    $plan = New-TkCleanPlan -Inventory (New-StandardPc) -Catalog $catalog
     Should-Be (Get-PlanItem $plan 'Microsoft.BingNews').Action 'Remove' 'News'
-    Should-Be (Get-PlanItem $plan 'Microsoft.WindowsCalculator').Action 'Keep' 'Calculator'
+    $calc = Get-PlanItem $plan 'Microsoft.WindowsCalculator'
+    Should-Be $calc.Action 'Keep' 'Calculator'; Should-Be $calc.Choice 'Remove' 'Calculator can be ticked'; Should-BeFalse $calc.Selected 'but starts unticked'
     Should-Be (Get-PlanItem $plan 'Microsoft.WindowsStore').Action 'Keep' 'Store'
     Should-Be (Get-PlanItem $plan 'MSTeams').Action 'Keep' 'Teams'
     Should-Be (Get-PlanItem $plan 'Contoso.Kiosk').Action 'Unknown' 'company app'
@@ -130,29 +133,49 @@ It 'plans an office PC' {
     $clip = Get-PlanItem $plan 'Clipchamp.Clipchamp'
     Should-Be $clip.Action 'Remove' 'Clipchamp'; Should-BeTrue $clip.Provisioned 'set up for new users'; Should-BeFalse $clip.Installed 'installed'
     Should-Be (Get-PlanItem $plan 'Microsoft.Copilot').Action 'Block' 'Copilot ahead'
-    Should-BeFalse (@($plan.Settings | Where-Object { $_.Name -eq 'OneDriveSetup' }).Count) 'office keeps OneDrive for new users'
+    Should-Be (Get-PlanItem $plan 'Microsoft.OutlookForWindows').Action 'Skip' 'Outlook (new) is offered, not blocked'
+    Should-BeFalse (@($plan.Settings | Where-Object { $_.Name -eq 'OneDriveSetup' }).Count) 'OneDrive still set up for new users'
 }
-It 'plans a kiosk PC' {
-    $plan = New-TkCleanPlan -Inventory (New-StandardPc) -Catalog $catalog -Profile 'kiosk'
+It 'ticks everything for a kiosk or a till with -Include all' {
+    $plan = New-TkCleanPlan -Inventory (New-StandardPc) -Catalog $catalog -Include 'all'
     foreach ($n in 'Microsoft.WindowsCalculator', 'Microsoft.WindowsStore', 'MSTeams', 'Microsoft.BingNews') { Should-Be (Get-PlanItem $plan $n).Action 'Remove' $n }
     Should-Be (Get-PlanItem $plan 'Microsoft.OutlookForWindows').Action 'Block' 'Outlook ahead'
-    Should-BeTrue (@($plan.Settings | Where-Object { $_.Name -eq 'OneDriveSetup' -and $_.Scope -eq 'NewUsers' }).Count) 'no OneDrive setup for new kiosk users'
+    Should-BeTrue (@($plan.Settings | Where-Object { $_.Name -eq 'OneDriveSetup' -and $_.Scope -eq 'NewUsers' }).Count) 'no OneDrive set-up for new users'
+}
+It 'takes -Include and -Exclude by group and by app, in any letter case' {
+    $inv = New-StandardPc
+    $p = New-TkCleanPlan -Inventory $inv -Catalog $catalog -Include 'everyday'
+    Should-Be (Get-PlanItem $p 'Microsoft.WindowsCalculator').Action 'Remove' 'a group ticks its apps'
+    Should-Be (Get-PlanItem $p 'Microsoft.WindowsStore').Action 'Keep' 'other groups as they start'
+    Should-Be (@($p.Include) -join ',') 'everyday' 'the choice is recorded'
+    $p = New-TkCleanPlan -Inventory $inv -Catalog $catalog -Exclude 'Microsoft.BingNews'
+    Should-Be (Get-PlanItem $p 'Microsoft.BingNews').Action 'Keep' 'one app unticked'
+    Should-Be (Get-PlanItem $p 'Microsoft.GamingApp').Action 'Remove' 'the rest still removed'
+    $p = New-TkCleanPlan -Inventory $inv -Catalog $catalog -Include 'everyday,communication'
+    Should-Be (Get-PlanItem $p 'MSTeams').Action 'Remove' 'a list in one string (powershell.exe -File)'
+    $p = New-TkCleanPlan -Inventory $inv -Catalog $catalog -Include 'all' -Exclude 'store'
+    Should-Be (Get-PlanItem $p 'Microsoft.WindowsStore').Action 'Keep' 'exclude wins over include'
+    Should-Be (Get-PlanItem $p 'Microsoft.WindowsCalculator').Action 'Remove' 'include all'
+    Should-Be (Get-PlanItem (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Exclude 'AI') 'Microsoft.Copilot').Action 'Skip' 'a group name in capitals'
+    Should-Throw { New-TkCleanPlan -Inventory $inv -Catalog $catalog -Include 'evryday' } '*not an app or a group*'
 }
 It 'applies the organization file' {
     $org = Join-Path $tmp 'org.json'
-    Set-Content -LiteralPath $org -Value '{"keep":["Microsoft.WindowsCalculator"],"alsoRemove":{"office":["Microsoft.OutlookForWindows"]}}'
+    Set-Content -LiteralPath $org -Value '{"keep":["Microsoft.WindowsCalculator"],"alsoRemove":["Microsoft.OutlookForWindows"]}'
     $o = Get-TkOrganization -Path $org -Catalog $catalog
     $inv = New-StandardPc
-    Should-Be (Get-PlanItem (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'kiosk' -Organization $o) 'Microsoft.WindowsCalculator').Action 'Protected' 'kept by the organization'
-    Should-Be (Get-PlanItem (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office' -Organization $o) 'Microsoft.OutlookForWindows').Action 'Block' 'extra removal'
-    Set-Content -LiteralPath $org -Value '{"alsoRemove":{"office":["Contoso.Kiosk"]}}'
+    Should-Be (Get-PlanItem (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Include 'all' -Organization $o) 'Microsoft.WindowsCalculator').Action 'Protected' 'kept by the organization'
+    Should-Be (Get-PlanItem (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Organization $o) 'Microsoft.OutlookForWindows').Action 'Block' 'starts ticked here'
+    Set-Content -LiteralPath $org -Value '{"alsoRemove":["Contoso.Kiosk"]}'
     Should-Throw { Get-TkOrganization -Path $org -Catalog $catalog } '*not in the catalog*'
+    Set-Content -LiteralPath $org -Value '{"alsoRemove":{"office":["Microsoft.OutlookForWindows"]}}'
+    Should-Throw { Get-TkOrganization -Path $org -Catalog $catalog } '*one list*'
     Reset-TkKeepPatterns
 }
 It 'lets the safety rules overrule a catalog' {
     $c = Join-Path $tmp 'cat.json'
-    Set-Content -LiteralPath $c -Value '{"version":"1","profiles":{"office":"x"},"apps":[{"name":"Microsoft.DesktopAppInstaller","title":"App Installer","remove":["office"]}]}'
-    $plan = New-TkCleanPlan -Inventory (New-FakeInventory -Appx @((New-FakePkg 'Microsoft.DesktopAppInstaller'))) -Catalog (Get-TkCatalog -Path $c) -Profile 'office'
+    Set-Content -LiteralPath $c -Value '{"version":"1","apps":[{"name":"Microsoft.DesktopAppInstaller","title":"App Installer","remove":"default"}]}'
+    $plan = New-TkCleanPlan -Inventory (New-FakeInventory -Appx @((New-FakePkg 'Microsoft.DesktopAppInstaller'))) -Catalog (Get-TkCatalog -Path $c) -Include 'all'
     Should-Be (Get-PlanItem $plan 'Microsoft.DesktopAppInstaller').Action 'Protected' 'App Installer'
 }
 
@@ -160,7 +183,7 @@ Write-Host ''; Write-Host 'Clean apps' -ForegroundColor Cyan
 It 'cleans an office PC for every user and for new users' {
     Reset-TkKeepPatterns
     $inv = New-StandardPc
-    $script:FirstPlan = New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office'
+    $script:FirstPlan = New-TkCleanPlan -Inventory $inv -Catalog $catalog
     $res = Invoke-TkCleanApps -Plan $script:FirstPlan -Apply
     Should-BeTrue (Test-Called 'RemoveAppx Microsoft.BingNews_*') 'News removed'
     Should-BeTrue (Test-Called 'RemoveProvisioned Microsoft.BingNews_*') 'News removed for new users'
@@ -192,7 +215,7 @@ It 'runs again safely: nothing new to do, nothing new to undo' {
 It 'keeps going when one removal fails, and says so' {
     $inv = New-StandardPc
     $global:Fake.FailRemove = @('Microsoft.GamingApp_1.0.0.0_x64__8wekyb3d8bbwe')
-    $res = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office') -Apply
+    $res = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog) -Apply
     Should-Be $res.Failed 1 'items with errors'
     Should-BeTrue (@($res.StillPresent) -contains 'Microsoft.GamingApp') 'Xbox reported as still present'
     Should-BeTrue (Test-Called 'RemoveAppx Microsoft.BingNews_*') 'the rest still ran'
@@ -200,7 +223,7 @@ It 'keeps going when one removal fails, and says so' {
 It 'removes the new-user copy first, which takes every user''s copy with it (Windows 10 and 11)' {
     $inv = New-StandardPc
     $global:Fake.ProvisionedRemovesInstalled = $true
-    $res = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office') -Apply
+    $res = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog) -Apply
     Should-Be $res.Failed 0 'items with errors'
     Should-BeTrue (Test-Called 'RemoveProvisioned Microsoft.BingNews_*') 'News removed for new users'
     Should-BeFalse (Test-Called 'RemoveAppx Microsoft.BingNews_*') 'no second removal for an app already gone'
@@ -209,7 +232,7 @@ It 'removes the new-user copy first, which takes every user''s copy with it (Win
 }
 It 'never removes an app for every user while it is still set up for new users (that fails on Windows 10)' {
     $inv = New-StandardPc
-    $null = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office') -Apply
+    $null = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog) -Apply
     $calls = @($global:Fake.Calls | ForEach-Object { "$_" }); $p = -1; $a = -1
     for ($i = 0; $i -lt $calls.Count; $i++) {
         if ($p -lt 0 -and $calls[$i] -clike 'RemoveProvisioned Microsoft.BingNews_*') { $p = $i }
@@ -219,19 +242,19 @@ It 'never removes an app for every user while it is still set up for new users (
 }
 It 'refuses a forged plan at the last moment' {
     Install-FakeSystem -Appx @((New-FakePkg 'Microsoft.DesktopAppInstaller'), (New-FakePkg 'Microsoft.BingNews' -NonRemovable))
-    $forged = [pscustomobject]@{ Profile = 'office'; Settings = @(); Items = @(
+    $forged = [pscustomobject]@{ Settings = @(); Items = @(
             [pscustomobject]@{ Name = 'Microsoft.DesktopAppInstaller'; Title = 'App Installer'; Action = 'Remove'; Family = $null; Restore = '' },
             [pscustomobject]@{ Name = 'Microsoft.BingNews'; Title = 'News'; Action = 'Remove'; Family = $null; Restore = '' }) }
     $res = Invoke-TkCleanApps -Plan $forged -Apply
     Should-BeFalse (Test-Called 'RemoveAppx*') 'nothing removed'
     Should-Be $res.Failed 2 'both refused'
 }
-It 'changes nothing without -Apply' { Should-Throw { Invoke-TkCleanApps -Plan ([pscustomobject]@{ Profile = 'office'; Items = @(); Settings = @() }) } '*without -Apply*' }
+It 'changes nothing without -Apply' { Should-Throw { Invoke-TkCleanApps -Plan ([pscustomobject]@{ Items = @(); Settings = @() }) } '*without -Apply*' }
 It 'undoes a run: settings back, blocks lifted, apps listed for reinstall' {
     $inv = New-StandardPc
     $cdm = 'HKU\S-1-5-21-1-1001\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
     $global:Fake.Reg[(Get-FakeKey $cdm)] = @{ SilentInstalledAppsEnabled = @{ Value = 1; Kind = 'DWord' } }
-    $res = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office') -Apply
+    $res = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog) -Apply
     Should-Be (Invoke-TkSys 'RegGet' @($cdm, 'SilentInstalledAppsEnabled')).Value 0 'changed by the run'
     Should-BeTrue ((Invoke-TkUndo -UndoFile $res.UndoFile).Settings -gt 0) 'preview counts settings'
     $u = Invoke-TkUndo -UndoFile $res.UndoFile -Apply
@@ -243,7 +266,7 @@ It 'undoes a run: settings back, blocks lifted, apps listed for reinstall' {
 }
 It 'reinstalls from the Store when asked' {
     $inv = New-StandardPc
-    $res = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office') -Apply
+    $res = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog) -Apply
     $u = Invoke-TkUndo -UndoFile $res.UndoFile -Apply -Reinstall
     Should-BeTrue (Test-Called 'RunExe winget.exe install --source msstore --id 9WZDNCRFHVFW*') 'winget for News'
     Should-BeTrue ($u.Reinstalled -gt 0) 'reinstalled'
@@ -252,7 +275,7 @@ It 'reinstalls from the Store when asked' {
 Write-Host ''; Write-Host 'Report' -ForegroundColor Cyan
 It 'writes an HTML report that escapes what it shows' {
     $inv = New-FakeInventory -Appx @((New-FakePkg 'Microsoft.BingNews')) -Programs @([pscustomobject]@{ DisplayName = '<script>alert(1)</script>'; Publisher = 'X'; Version = '1' })
-    $plan = New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office'
+    $plan = New-TkCleanPlan -Inventory $inv -Catalog $catalog
     $checks = @((New-TkCheck 'TPM' '2.0' 'none' 'Fail' $true 'n'), (New-TkCheck 'Memory' '4 GB' '8 GB' 'Pass' $false 'n'))
     $v = Get-TkVerdict -Checks $checks
     $ready = [pscustomobject]@{ Verdict = $v.Verdict; Summary = $v.Summary; Blockers = $v.Blockers; Fixable = $v.Fixable; Bypassable = $v.Bypassable; Unknown = $v.Unknown; Checks = $checks }
@@ -260,7 +283,7 @@ It 'writes an HTML report that escapes what it shows' {
     $paths = Save-TkReport -Report $rep -Dir $tmp
     $html = Get-Content -LiteralPath $paths.Html -Raw
     Should-BeTrue ($html -like '*Windows 11 readiness*') 'readiness section'
-    Should-BeTrue ($html -like '*Clean apps preview: office profile*') 'plan section'
+    Should-BeTrue ($html -like '*Clean apps preview*') 'plan section'
     Should-BeTrue ($html -like '*&lt;script&gt;alert(1)&lt;/script&gt;*') 'escaped'
     Should-BeFalse ($html -like '*<script>alert*') 'no raw script'
     Should-BeTrue (Test-Path -LiteralPath $paths.Json) 'JSON written'
@@ -340,7 +363,7 @@ It 'gives the same answers under Turkish, Thai, Saudi and Persian region setting
             Should-BeTrue (Test-TkProtected -Name 'APPUP.INTELGRAPHICSEXPERIENCE') "driver apps protected in $c"
             Should-Throw { Assert-TkRegistryWrite -Path 'HKLM\SOFTWARE\POLICIES\MICROSOFT\WINDOWS DEFENDER' -Name 'DisableAntiSpyware' } '*security*'
             Assert-TkRegistryWrite -Path 'HKU\S-1-5-21-1-1001\SOFTWARE\MICROSOFT\WINDOWS\CURRENTVERSION\CONTENTDELIVERYMANAGER' -Name 'SILENTINSTALLEDAPPSENABLED'
-            $plan = New-TkCleanPlan -Inventory (New-FakeInventory -Appx @((New-FakePkg 'MICROSOFT.WINDOWSCALCULATOR'))) -Catalog $catalog -Profile 'kiosk'
+            $plan = New-TkCleanPlan -Inventory (New-FakeInventory -Appx @((New-FakePkg 'MICROSOFT.WINDOWSCALCULATOR'))) -Catalog $catalog -Include 'all'
             Should-Be (Get-PlanItem $plan 'MICROSOFT.WINDOWSCALCULATOR').Action 'Remove' "catalog match in $c"
             Should-Be (Get-TkCpuSupport -Name 'INTEL(R) CORE(TM) I5-8250U CPU @ 1.60GHZ').Status 'Pass' "processor read in $c"
         }
@@ -395,6 +418,16 @@ It 'refuses an image that does not match the pinned SHA-256' {
     Should-BeFalse (Test-Called 'MountIso*') 'never mounted'
     Should-BeFalse (Test-Path -LiteralPath (Join-Path $paths.Download 'windows11.iso')) 'bad download deleted'
 }
+It 'keeps the choices made before the upgrade when it cleans on the new build' {
+    Install-FakeSystem -Appx @((New-FakePkg 'Microsoft.Copilot'), (New-FakePkg 'Microsoft.BingNews'), (New-FakePkg 'Microsoft.WindowsCalculator'))
+    $paths = New-TestJob -CleanAfter $true -Include @('Microsoft.WindowsCalculator') -Exclude @('Microsoft.Copilot')
+    Write-TkUpgradeState 'Restarting' 'test'
+    $global:Fake.Os = New-FakeOs -Build 26200
+    Should-Be (Invoke-TkAfterUpgrade -JobPath $paths.Job) 'Done' 'result'
+    Should-BeFalse (Test-Called 'RemoveAppx Microsoft.Copilot_*') 'unticked before the upgrade: stays'
+    Should-BeTrue (Test-Called 'RemoveAppx Microsoft.WindowsCalculator_*') 'ticked before the upgrade: removed'
+    Should-BeTrue (Test-Called 'RemoveAppx Microsoft.BingNews_*') 'the defaults for the rest'
+}
 It 'finishes after the first sign-in on the new build' {
     Install-FakeSystem -Appx @((New-FakePkg 'Microsoft.Copilot'))
     $paths = New-TestJob -AllowUnsupported $true -CleanAfter $true
@@ -439,17 +472,26 @@ It 'hands the upgrade to a background task, once' {
 
 Write-Host ''; Write-Host 'The window' -ForegroundColor Cyan
 Import-Module (Join-Path $root 'modules\GuiCore.psm1') -Force -DisableNameChecking -Global
-It 'groups the plan for the window, and an unticked group is kept' {
+It 'shows every choice in its group, and the ticks decide the plan' {
     Reset-TkKeepPatterns
-    $plan = New-TkCleanPlan -Inventory (New-StandardPc) -Catalog $catalog -Profile 'office'
+    $plan = New-TkCleanPlan -Inventory (New-StandardPc) -Catalog $catalog
     $groups = @(Get-TkPlanGroups -Plan $plan)
-    Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'gaming' }).Count) 'an Xbox and games group'
-    Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'ai' -and $_.Block -ge 1 }).Count) 'Copilot shows as blocked ahead'
-    $trim = Select-TkPlanGroups -Plan $plan -Unticked @('gaming')
-    Should-Be (Get-PlanItem $trim 'Microsoft.GamingApp').Action 'Keep' 'unticked group kept'
-    Should-Be (Get-PlanItem $trim 'Microsoft.BingNews').Action 'Remove' 'other groups still removed'
+    $every = @($groups | Where-Object { $_.Key -eq 'everyday' })
+    Should-BeTrue ($every.Count -and $every[0].Total -ge 1 -and $every[0].Selected -eq 0) 'everyday tools offered, unticked'
+    Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'gaming' -and $_.Selected -eq $_.Total }).Count) 'Xbox and games ticked'
+    Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'ai' -and @($_.Items | Where-Object { $_.Choice -eq 'Block' }).Count }).Count) 'Copilot offered as blocked ahead'
+    Should-BeTrue (@($groups | Where-Object { $_.Key -eq 'newusers' }).Count) 'the OneDrive setting is a choice too'
+    # In the window: untick Xbox, tick Calculator, leave the rest as it starts.
+    $on = @(@($plan.Items | Where-Object { $_.Selected -and $_.Name -ne 'Microsoft.GamingApp' } | ForEach-Object { $_.Name }) + 'Microsoft.WindowsCalculator')
+    $trim = Select-TkPlanItems -Plan $plan -Selected $on
+    Should-Be (Get-PlanItem $trim 'Microsoft.GamingApp').Action 'Keep' 'unticked app kept'
+    Should-Be (Get-PlanItem $trim 'Microsoft.WindowsCalculator').Action 'Remove' 'ticked app removed'
+    Should-Be (Get-PlanItem $trim 'Microsoft.BingNews').Action 'Remove' 'the rest as it started'
     Should-Be (Get-PlanItem $plan 'Microsoft.GamingApp').Action 'Remove' 'the original plan is untouched'
-    Should-Be $trim.Counts.Remove ($plan.Counts.Remove - 1) 'counts follow the trim'
+    Should-Be (@($trim.Include) -join ',') 'Microsoft.WindowsCalculator' 'written as a difference from the defaults: include'
+    Should-Be (@($trim.Exclude) -join ',') 'Microsoft.GamingApp' 'and exclude'
+    $set = (Select-TkPlanItems -Plan $plan -Selected (@($on) + 'NewUsers.OneDriveSetup')).Settings
+    Should-BeTrue (@($set | Where-Object { $_.Name -eq 'OneDriveSetup' }).Count) 'ticking the OneDrive choice adds its setting'
 }
 It 'runs work in the background and streams its log' {
     $sync = New-TkSync

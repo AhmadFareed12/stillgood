@@ -303,7 +303,7 @@ function Copy-TkAppFiles {
 
 function Start-TkUpgrade {
     # Writes the job, copies the toolkit locally and starts the background task. Returns at once; the monitor shows progress.
-    param([Parameter(Mandatory = $true)]$Config, [bool]$AllowUnsupported, [bool]$NoRestart, [bool]$CleanAfter, [string]$Profile = 'office', [string]$OrganizationPath)
+    param([Parameter(Mandatory = $true)]$Config, [bool]$AllowUnsupported, [bool]$NoRestart, [bool]$CleanAfter, [string[]]$Include = @(), [string[]]$Exclude = @(), [string]$OrganizationPath)
     $paths = Get-TkUpgradePaths
     $state = Read-TkUpgradeState
     if ($state -and @('Queued', 'Preparing', 'Downloading', 'WaitingForImage', 'Verifying', 'Scanning', 'Upgrading', 'Restarting') -contains $state.Stage) {
@@ -315,7 +315,8 @@ function Start-TkUpgrade {
     if ($OrganizationPath) { $org = Join-Path $app 'catalog\organization.json'; Copy-Item -LiteralPath $OrganizationPath -Destination $org -Force }
     $job = [pscustomobject]@{
         Created = (Get-Date).ToString('s'); StartBuild = (Invoke-TkSys 'GetOs').Build; Config = $Config
-        AllowUnsupported = $AllowUnsupported; NoRestart = $NoRestart; CleanAfter = $CleanAfter; Profile = $Profile; Organization = $org; AppDir = $app
+        AllowUnsupported = $AllowUnsupported; NoRestart = $NoRestart; CleanAfter = $CleanAfter
+        Include = @(Split-TkList $Include); Exclude = @(Split-TkList $Exclude); Organization = $org; AppDir = $app
     }
     Save-TkJson $job $paths.Job
     Write-TkUpgradeState 'Queued' 'The upgrade task is starting in the background.' @{ Progress = $null }

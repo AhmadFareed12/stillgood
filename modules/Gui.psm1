@@ -3,6 +3,24 @@
 # The work runs in a background runspace (GuiCore.psm1), so the window stays responsive.
 Set-StrictMode -Version 2.0
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+if (-not ('TkNative.TkTree' -as [type])) {
+    # A tree with tick boxes that ignores a double-click on a tick box: the standard TreeView then shows a tick that
+    # does not match its state (a long-standing Windows bug).
+    Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
+namespace TkNative {
+    public class TkTree : System.Windows.Forms.TreeView {
+        protected override void WndProc(ref System.Windows.Forms.Message m) {
+            if (m.Msg == 0x203) {
+                long lp = m.LParam.ToInt64();
+                System.Windows.Forms.TreeViewHitTestInfo hit = this.HitTest((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+                if (hit.Location == System.Windows.Forms.TreeViewHitTestLocations.StateImage) { m.Result = System.IntPtr.Zero; return; }
+            }
+            base.WndProc(ref m);
+        }
+    }
+}
+'@
+}
 
 $script:Ui = @{}
 $script:Mon = @{}
@@ -24,42 +42,23 @@ function Measure-TkText {
     return [System.Windows.Forms.TextRenderer]::MeasureText($Text, $Font, (New-Object System.Drawing.Size([Math]::Max(10, $Width), 0)), $flags).Height
 }
 
-function Set-TkUiGroupRows {
-    # Each app group's check box as wide as the list and as tall as its text needs: long names wrap, never cut.
-    $ui = $script:Ui; $s = $ui.Scale
-    $w = $ui.Groups.ClientSize.Width - [int](22 * $s)
-    foreach ($c in @($ui.Groups.Controls)) {
-        $one = Measure-TkText 'Ag' $c.Font 1000
-        $th = Measure-TkText $c.Text $c.Font ($w - [int](24 * $s))
-        if ($c -is [System.Windows.Forms.CheckBox]) {
-            if ($th -gt $one + 2) { $c.CheckAlign = 'TopLeft'; $c.TextAlign = 'TopLeft' } else { $c.CheckAlign = 'MiddleLeft'; $c.TextAlign = 'MiddleLeft' }
-        }
-        $c.Size = New-Object System.Drawing.Size($w, [Math]::Max([int](26 * $s), $th + [int](8 * $s)))
-    }
-}
-
 function Set-TkUiLayout {
     # Lays out the middle of the window for its actual size, from measured text: an old PC's small screen, a large
     # one, 100 to 200 percent display scaling and long texts all fit without cutting anything off.
     $ui = $script:Ui
-    if (-not $ui.List -or -not $ui.Main) { return }
-    $s = $ui.Scale; $pad = [int](16 * $s); $gap = [int](20 * $s)
+    if (-not $ui.Tree -or -not $ui.Main) { return }
+    $s = $ui.Scale; $pad = [int](16 * $s)
     $W = $ui.Main.ClientSize.Width; $H = $ui.Main.ClientSize.Height
     $inner = [Math]::Max([int](300 * $s), $W - 2 * $pad)
     $ui.Info.SetBounds($pad, [int](12 * $s), $inner, [int](22 * $s))
     $vh = Measure-TkText $ui.Verdict.Text $ui.Verdict.Font ($inner - [int](20 * $s))
     $ui.Verdict.SetBounds($pad, $ui.Info.Bottom + [int](6 * $s), $inner, [Math]::Max([int](34 * $s), $vh + [int](12 * $s)))
-    $col = [int](($inner - $gap) * 0.52)
-    $top = $ui.Verdict.Bottom + [int](14 * $s)
-    $ui.GroupsTitle.SetBounds($pad, $top, $col, (Measure-TkText $ui.GroupsTitle.Text $ui.GroupsTitle.Font $col) + [int](2 * $s))
-    $nh = Measure-TkText $ui.Never.Text $ui.Never.Font $col
-    $ui.Never.SetBounds($pad, $H - $nh - [int](8 * $s), $col, $nh)
-    $gy = $ui.GroupsTitle.Bottom + [int](4 * $s)
-    $ui.Groups.SetBounds($pad, $gy, $col, [Math]::Max([int](60 * $s), $ui.Never.Top - $gy - [int](6 * $s)))
-    Set-TkUiGroupRows
-    $x2 = $pad + $col + $gap; $w2 = $inner - $col - $gap
-    $ui.ListTitle.SetBounds($x2, $top, $w2, $ui.GroupsTitle.Height)
-    $ui.List.SetBounds($x2, $gy, $w2, [Math]::Max([int](60 * $s), $H - $gy - [int](8 * $s)))
+    $top = $ui.Verdict.Bottom + [int](12 * $s)
+    $ui.GroupsTitle.SetBounds($pad, $top, $inner, (Measure-TkText $ui.GroupsTitle.Text $ui.GroupsTitle.Font $inner) + [int](2 * $s))
+    $nh = Measure-TkText $ui.Never.Text $ui.Never.Font $inner
+    $ui.Never.SetBounds($pad, $H - $nh - [int](6 * $s), $inner, $nh)
+    $ty = $ui.GroupsTitle.Bottom + [int](4 * $s)
+    $ui.Tree.SetBounds($pad, $ty, $inner, [Math]::Max([int](80 * $s), $ui.Never.Top - $ty - [int](6 * $s)))
 }
 
 function Show-TkUiInfo { param([string]$Text) [void][System.Windows.Forms.MessageBox]::Show($script:Ui.Form, $Text, 'StillGood', 'OK', 'Information') }
@@ -73,8 +72,7 @@ function Set-TkUiBusy {
     param([bool]$Busy)
     $ui = $script:Ui
     foreach ($b in $ui.Buttons) { $b.Enabled = -not $Busy }
-    $ui.Office.Enabled = -not $Busy; $ui.Kiosk.Enabled = -not $Busy
-    foreach ($cb in @($ui.Groups.Controls)) { $cb.Enabled = -not $Busy }
+    $ui.Tree.Enabled = -not $Busy
     $ui.Bar.Visible = $Busy
     if (-not $Busy) { $ui.Status.Text = 'Ready. Choose an action on the left.' }
 }
@@ -104,20 +102,39 @@ function Update-TkUiTick {
 }
 
 function Get-TkUiTrimmedPlan {
+    # The plan with exactly what is ticked in the tree.
     $ui = $script:Ui
-    $off = @($ui.Groups.Controls | Where-Object { $_ -is [System.Windows.Forms.CheckBox] -and -not $_.Checked } | ForEach-Object { [string]$_.Tag })
-    return (Select-TkPlanGroups -Plan $ui.Scan.Plan -Unticked $off)
+    $on = @(foreach ($g in @($ui.Tree.Nodes)) { foreach ($n in @($g.Nodes)) { if ($n.Checked) { [string]$n.Tag } } })
+    return (Select-TkPlanItems -Plan $ui.Scan.Plan -Selected $on)
 }
 
-function Update-TkUiList {
+function Update-TkUiSummary {
+    # The line above the tree and each group's "ticked of total", after any tick changes.
     $ui = $script:Ui
     if (-not $ui.Scan) { return }
+    foreach ($g in @($ui.Tree.Nodes)) {
+        $on = @(@($g.Nodes) | Where-Object { $_.Checked }).Count
+        $g.Text = "$($g.Name)   ($on of $($g.Nodes.Count))"
+    }
     $plan = Get-TkUiTrimmedPlan
-    $ui.List.BeginUpdate(); $ui.List.Items.Clear()
-    foreach ($i in @($plan.Items | Where-Object { $_.Action -eq 'Remove' })) { [void]$ui.List.Items.Add($i.Title) }
-    foreach ($i in @($plan.Items | Where-Object { $_.Action -eq 'Block' })) { [void]$ui.List.Items.Add("$($i.Title) (blocked before it arrives)") }
-    $ui.List.EndUpdate()
-    $ui.ListTitle.Text = "Will be removed: $($plan.Counts.Remove) apps, $($plan.Counts.Block) blocked"
+    $c = $plan.Counts
+    $t = "Clean apps will remove $($c.Remove) app$(if ($c.Remove -ne 1) { 's' }) and block $($c.Block) before they arrive"
+    if (@($plan.Items | Where-Object { $_.Action -eq 'Setting' }).Count) { $t += ', and turn off OneDrive set-up for new users' }
+    $ui.GroupsTitle.Text = "$t. Tick a group for all its apps, or tick and untick apps one by one."
+    Set-TkUiLayout
+}
+
+function Sync-TkUiTicks {
+    # A group's tick sets all its apps; an app's tick shows on its group (ticked while any app in it is).
+    param($Node)
+    $ui = $script:Ui
+    if ($ui.Syncing) { return }
+    $ui.Syncing = $true
+    try {
+        if ($null -eq $Node.Parent) { foreach ($n in @($Node.Nodes)) { $n.Checked = $Node.Checked } }
+        else { $Node.Parent.Checked = [bool]@(@($Node.Parent.Nodes) | Where-Object { $_.Checked }).Count }
+    } finally { $ui.Syncing = $false }
+    Update-TkUiSummary
 }
 
 function Update-TkUiScan {
@@ -132,27 +149,30 @@ function Update-TkUiScan {
     $c = $colors[$v]
     $ui.Verdict.BackColor = [System.Drawing.Color]::FromArgb($c[0], $c[1], $c[2]); $ui.Verdict.ForeColor = [System.Drawing.Color]::FromArgb($c[3], $c[4], $c[5])
     $ui.Verdict.Text = "Windows 11: $($s.Readiness.Summary)"
-    $ui.Groups.SuspendLayout(); $ui.Groups.Controls.Clear()
+    # The tree: every group, every app in it, each with its own tick, as the plan starts them.
+    $ui.Syncing = $true
+    $ui.Tree.BeginUpdate(); $ui.Tree.Nodes.Clear()
     foreach ($g in @(Get-TkPlanGroups -Plan $s.Plan)) {
-        $t = "$($g.Title)  -  $($g.Remove) app$(if ($g.Remove -ne 1) { 's' })"
-        if ($g.Block) { $t += ", $($g.Block) blocked ahead" }
-        $cb = New-TkCtl CheckBox $t 0 0 380 26
-        $cb.Checked = $true; $cb.Tag = $g.Key
-        $ui.Tips.SetToolTip($cb, (($g.Items | ForEach-Object { $_.Title }) -join ', '))
-        $cb.Add_CheckedChanged({ Update-TkUiList })
-        $ui.Groups.Controls.Add($cb)
+        $gn = $ui.Tree.Nodes.Add($g.Title); $gn.Name = $g.Title; $gn.Tag = $g.Key
+        foreach ($i in @($g.Items)) {
+            $n = $gn.Nodes.Add((Get-TkChoiceText $i)); $n.Tag = [string]$i.Name; $n.NodeFont = $ui.RowFont
+            $tip = [string]$i.Name; if ($i.Note) { $tip += "`r`n" + $i.Note }; $n.ToolTipText = $tip
+            $n.Checked = [bool]$i.Selected
+        }
+        $gn.Checked = [bool]@(@($gn.Nodes) | Where-Object { $_.Checked }).Count
     }
-    if (-not $ui.Groups.Controls.Count) { $ui.Groups.Controls.Add((New-TkCtl Label 'Nothing to remove for this profile: these apps are already gone.' 0 0 380 40)) }
-    $ui.Groups.ResumeLayout()
-    $ui.GroupsTitle.Text = 'What Clean apps removes (untick a group to keep it)'
+    $ui.Tree.ExpandAll()
+    if ($ui.Tree.Nodes.Count) { $ui.Tree.Nodes[0].EnsureVisible() }
+    $ui.Tree.EndUpdate()
+    $ui.Syncing = $false
     $ui.ReportLink.Enabled = $true
-    Set-TkUiLayout
-    Update-TkUiList
+    if ($ui.Tree.Nodes.Count) { Update-TkUiSummary }
+    else { $ui.GroupsTitle.Text = 'Nothing to remove: the apps StillGood knows are already gone from this PC.'; Set-TkUiLayout }
 }
 
 function Start-TkUiScan {
     $ui = $script:Ui
-    Start-TkUiJob -Status 'Checking this PC. Nothing is changed.' -Job Scan -Arguments @{ Profile = $ui.Profile; Org = $ui.Org } -OnDone {
+    Start-TkUiJob -Status 'Checking this PC. Nothing is changed.' -Job Scan -Arguments @{ Org = $ui.Org } -OnDone {
         param($res, $err)
         if ($err) { Show-TkUiError "The check stopped: $err"; return }
         $script:Ui.Scan = $res
@@ -166,7 +186,7 @@ function Start-TkUiClean {
     $ui = $script:Ui
     if (-not $ui.Scan) { $ui.Then = { Start-TkUiClean }; Start-TkUiScan; return }
     $plan = Get-TkUiTrimmedPlan
-    if (-not ($plan.Counts.Remove + $plan.Counts.Block)) { Show-TkUiInfo 'Nothing to remove: every group is unticked, or these apps are already gone.'; return }
+    if (-not ($plan.Counts.Remove + $plan.Counts.Block + @($plan.Items | Where-Object { $_.Action -eq 'Setting' }).Count)) { Show-TkUiInfo 'Nothing to remove: nothing is ticked, or these apps are already gone.'; return }
     $msg = "Clean apps will remove $($plan.Counts.Remove) apps for every user and for new users, block $($plan.Counts.Block) from coming back, and change $(@($plan.Settings).Count) settings so they stay away.`r`n`r`nEvery change is written to an undo file.`r`n`r`nClean apps now?"
     if (-not (Confirm-TkUi $msg)) { return }
     Start-TkUiJob -Status 'Cleaning apps. This takes a minute or two.' -Job Clean -Arguments @{ Plan = $plan } -OnDone {
@@ -249,7 +269,7 @@ function Start-TkUiUpgrade {
     if ($CleanToo) { $steps += ' and clean the apps Windows 11 brings' }
     $steps += ".`r`n`r`nRunning Setup accepts the Microsoft Software License Terms for Windows 11 on this PC.`r`n`r`nStart the upgrade?"
     if (-not (Confirm-TkUi $steps)) { return }
-    $jobArgs = @{ Config = $cfg; Unsupported = $unsupported; CleanToo = $CleanToo; Profile = $ui.Scan.Plan.Profile; Org = $ui.Org; Plan = (Get-TkUiTrimmedPlan) }
+    $jobArgs = @{ Config = $cfg; Unsupported = $unsupported; CleanToo = $CleanToo; Org = $ui.Org; Plan = (Get-TkUiTrimmedPlan) }
     Start-TkUiJob -Status 'Starting the upgrade ...' -Job Upgrade -Arguments $jobArgs -OnDone {
         param($res, $err)
         if ($err) { Show-TkUiError "The upgrade did not start: $err"; return }
@@ -321,11 +341,11 @@ function Show-TkMonitorWindow {
 }
 
 function Show-TkWindow {
-    param([Parameter(Mandatory = $true)][string]$Root, [ValidateSet('office', 'kiosk')][string]$Profile = 'office', [string]$OrgPath = '')
+    param([Parameter(Mandatory = $true)][string]$Root, [string]$OrgPath = '')
     if (-not ('TkNative.Dpi' -as [type])) { Add-Type -Namespace TkNative -Name Dpi -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetProcessDPIAware();' }
     [void][TkNative.Dpi]::SetProcessDPIAware()
     [System.Windows.Forms.Application]::EnableVisualStyles()
-    $script:Ui = @{ Root = $Root; Profile = $Profile; Org = $OrgPath; Scan = $null; Job = $null; OnDone = $null; Then = $null; Sync = (New-TkSync) }
+    $script:Ui = @{ Root = $Root; Org = $OrgPath; Scan = $null; Job = $null; OnDone = $null; Then = $null; Syncing = $false; Sync = (New-TkSync) }
     $ui = $script:Ui
     # Display scaling (100 to 200 percent): sizes below are in pixels at 100 percent and scale with the screen.
     $g = [System.Drawing.Graphics]::FromHwnd([IntPtr]::Zero); $ui.Scale = [double]$g.DpiX / 96; $g.Dispose()
@@ -359,18 +379,12 @@ function Show-TkWindow {
         [void]$ui.Buttons.Add($b); $left.Controls.Add($b)
         $y += 48
     }
-    $grp = New-TkCtl GroupBox 'This PC is' 14 ($y + 8) 214 88
-    $ui.Office = New-TkCtl RadioButton 'an office PC' 12 24 190 24
-    $ui.Kiosk = New-TkCtl RadioButton 'a kiosk or point of sale' 12 52 196 24
-    if ($Profile -eq 'kiosk') { $ui.Kiosk.Checked = $true } else { $ui.Office.Checked = $true }
-    $ui.Office.Add_CheckedChanged({ if ($script:Ui.Office.Checked -and $script:Ui.Profile -ne 'office') { $script:Ui.Profile = 'office'; Start-TkUiScan } })
-    $ui.Kiosk.Add_CheckedChanged({ if ($script:Ui.Kiosk.Checked -and $script:Ui.Profile -ne 'kiosk') { $script:Ui.Profile = 'kiosk'; Start-TkUiScan } })
-    $grp.Controls.AddRange(@($ui.Office, $ui.Kiosk)); $left.Controls.Add($grp)
-    $ui.ReportLink = New-TkCtl LinkLabel 'Open the full report' 18 ($y + 108) 200 22; $ui.ReportLink.Enabled = $false
+    $ui.ReportLink = New-TkCtl LinkLabel 'Open the full report' 18 ($y + 10) 200 22; $ui.ReportLink.Enabled = $false
     $ui.ReportLink.Add_LinkClicked({ if ($script:Ui.Scan) { Start-Process $script:Ui.Scan.Html } })
     $left.Controls.Add($ui.ReportLink)
 
     $bottom = New-Object System.Windows.Forms.Panel; $bottom.Dock = 'Bottom'; $bottom.Height = 200; $bottom.Padding = New-Object System.Windows.Forms.Padding(14, 6, 14, 12)
+    if ($wa.Height -lt 800) { $bottom.Height = 150 }   # a small screen: more room for the list of apps
     $ui.Log = New-Object System.Windows.Forms.TextBox; $ui.Log.Multiline = $true; $ui.Log.ReadOnly = $true; $ui.Log.ScrollBars = 'Vertical'; $ui.Log.Dock = 'Fill'
     $ui.Log.Font = New-Object System.Drawing.Font('Consolas', 9); $ui.Log.BackColor = [System.Drawing.Color]::FromArgb(250, 250, 250)
     $statusRow = New-Object System.Windows.Forms.Panel; $statusRow.Dock = 'Top'; $statusRow.Height = 30
@@ -384,14 +398,17 @@ function Show-TkWindow {
     $ui.Info = New-TkCtl Label '' 16 14 760 22; $ui.Info.AutoEllipsis = $true
     $ui.Verdict = New-TkCtl Label 'Windows 11: checking ...' 16 42 760 32; $ui.Verdict.TextAlign = 'MiddleLeft'; $ui.Verdict.BackColor = [System.Drawing.Color]::FromArgb(238, 238, 238)
     $ui.Verdict.Padding = New-Object System.Windows.Forms.Padding(8, 0, 8, 0)
-    $ui.GroupsTitle = New-TkCtl Label 'What Clean apps removes (untick a group to keep it)' 16 88 420 20; $ui.GroupsTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9.75)
-    $ui.Groups = New-Object System.Windows.Forms.FlowLayoutPanel; $ui.Groups.Location = New-Object System.Drawing.Point(16, 112); $ui.Groups.Size = New-Object System.Drawing.Size(400, 250)
-    $ui.Groups.FlowDirection = 'TopDown'; $ui.Groups.WrapContents = $false; $ui.Groups.AutoScroll = $true
+    $ui.GroupsTitle = New-TkCtl Label 'What Clean apps removes' 16 88 420 20; $ui.GroupsTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9.75)
+    # One list: the groups, and every app under its group with its own tick. The tree's font is the bold one (the
+    # group names) and the apps are regular: a node font bolder than the tree's would be clipped.
+    $ui.Tree = New-Object TkNative.TkTree
+    $ui.Tree.CheckBoxes = $true; $ui.Tree.ShowNodeToolTips = $true; $ui.Tree.ShowLines = $false; $ui.Tree.HideSelection = $true
+    $ui.Tree.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9.75); $ui.RowFont = New-Object System.Drawing.Font('Segoe UI', 9.75)
+    $ui.Tree.ItemHeight = [int](24 * $ui.Scale); $ui.Tree.BorderStyle = 'FixedSingle'
+    $ui.Tree.Add_AfterCheck({ param($sender, $e) Sync-TkUiTicks $e.Node })
     $never = New-TkCtl Label 'Never removed: Windows itself, Windows Security, Edge, App Installer, runtimes, languages, driver apps and your own software.' 16 366 400 40; $never.ForeColor = [System.Drawing.Color]::Gray
     $ui.Never = $never
-    $ui.ListTitle = New-TkCtl Label 'Will be removed' 436 88 340 20; $ui.ListTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9.75)
-    $ui.List = New-TkCtl ListBox '' 436 112 340 294; $ui.List.IntegralHeight = $false; $ui.List.HorizontalScrollbar = $true
-    $main.Controls.AddRange(@($ui.Info, $ui.Verdict, $ui.GroupsTitle, $ui.Groups, $never, $ui.ListTitle, $ui.List))
+    $main.Controls.AddRange(@($ui.Info, $ui.Verdict, $ui.GroupsTitle, $ui.Tree, $never))
     $main.Add_Resize({ Set-TkUiLayout })
 
     $f.Controls.AddRange(@($main, $bottom, $left, $head))

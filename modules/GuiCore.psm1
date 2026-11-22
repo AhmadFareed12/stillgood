@@ -12,41 +12,32 @@ $script:GroupTitles = [ordered]@{
     communication = 'Mail and chat'
     store = 'Microsoft Store'
     tools = 'Tools'
+    newusers = 'For new users'
 }
 
 function Get-TkPlanGroups {
-    # The plan's removals and blocks, grouped by catalog category, in a fixed order.
+    # Every choice in the plan (ticked or not), grouped by catalog category in a fixed order: the window's tree.
     param([Parameter(Mandatory = $true)]$Plan)
-    $acts = @($Plan.Items | Where-Object { $_.Action -eq 'Remove' -or $_.Action -eq 'Block' })
-    $extra = @($acts | ForEach-Object { [string]$_.Category } | Where-Object { -not $script:GroupTitles.Contains($_) } | Sort-Object -Unique)
+    $choices = @($Plan.Items | Where-Object { $_.Choice })
+    $extra = @($choices | ForEach-Object { [string]$_.Category } | Where-Object { -not $script:GroupTitles.Contains($_) } | Sort-Object -Unique)
     $out = New-Object System.Collections.ArrayList
     foreach ($k in @(@($script:GroupTitles.Keys) + $extra)) {
-        $items = @($acts | Where-Object { [string]$_.Category -eq $k })
+        $items = @($choices | Where-Object { [string]$_.Category -eq $k } | Sort-Object @{ Expression = { $_.Choice -ne 'Remove' } }, Title)
         if (-not $items.Count) { continue }
         $title = 'Other catalog apps'; if ($script:GroupTitles.Contains($k)) { $title = $script:GroupTitles[$k] } elseif ($k) { $title = $k }
-        [void]$out.Add([pscustomobject]@{
-            Key = $k; Title = $title; Items = $items
-            Remove = @($items | Where-Object { $_.Action -eq 'Remove' }).Count; Block = @($items | Where-Object { $_.Action -eq 'Block' }).Count
-        })
+        [void]$out.Add([pscustomobject]@{ Key = $k; Title = $title; Items = $items; Selected = @($items | Where-Object { $_.Selected }).Count; Total = $items.Count })
     }
     return @($out)
 }
 
-function Select-TkPlanGroups {
-    # A copy of the plan where the unticked groups are kept instead of removed. The original plan is not changed.
-    param([Parameter(Mandatory = $true)]$Plan, [string[]]$Unticked = @())
-    $items = @(foreach ($i in @($Plan.Items)) {
-        $c = $i.PSObject.Copy()
-        if (($c.Action -eq 'Remove' -or $c.Action -eq 'Block') -and @($Unticked) -contains [string]$c.Category) {
-            $c.Action = 'Keep'; $c.Reason = 'Kept: its group was unticked in the window.'
-        }
-        $c
-    })
-    $copy = $Plan.PSObject.Copy()
-    $copy.Items = $items
-    $n = { param($a) @($items | Where-Object { $_.Action -eq $a }).Count }
-    $copy.Counts = [pscustomobject]@{ Remove = (& $n 'Remove'); Block = (& $n 'Block'); Keep = (& $n 'Keep'); Unknown = (& $n 'Unknown'); Protected = (& $n 'Protected') }
-    return $copy
+function Get-TkChoiceText {
+    # How one choice reads in the tree.
+    param($Item)
+    switch ($Item.Choice) {
+        'Block' { return "$($Item.Title)  (not on this PC: blocked before it arrives)" }
+        'Setting' { return "$($Item.Title)  (turned off; existing users keep theirs)" }
+        default { return [string]$Item.Title }
+    }
 }
 
 function New-TkSync {
@@ -85,13 +76,13 @@ function Complete-TkBackground {
 $script:Bodies = @{
     Scan    = {
         param($a)
-        $null = New-TkRun -Name "window-report-$($a.Profile)"
+        $null = New-TkRun -Name 'window-report'
         Write-TkLog 'Checking this PC. Nothing is changed.'
         $inv = Get-TkInventory
         $ready = Get-TkWin11Readiness
         $cat = Get-TkCatalog
         $org = Get-TkOrganization -Path ([string]$a.Org) -Catalog $cat
-        $plan = New-TkCleanPlan -Inventory $inv -Catalog $cat -Profile $a.Profile -Organization $org
+        $plan = New-TkCleanPlan -Inventory $inv -Catalog $cat -Organization $org
         $rep = New-TkReport -Inventory $inv -Readiness $ready -Plan $plan -OneDrive @(Get-TkOneDriveUsers)
         $paths = Save-TkReport -Report $rep -Dir (Get-TkRun).Dir
         Write-TkLog ('Checked: {0} {1} apps to remove, {2} to block, {3} protected.' -f $ready.Summary, $plan.Counts.Remove, $plan.Counts.Block, $plan.Counts.Protected)
@@ -99,7 +90,7 @@ $script:Bodies = @{
     }.ToString()
     Clean   = {
         param($a)
-        $null = New-TkRun -Name "window-clean-apps-$($a.Plan.Profile)"
+        $null = New-TkRun -Name 'window-clean-apps'
         Invoke-TkCleanApps -Plan $a.Plan -Apply
     }.ToString()
     Undo    = {
@@ -114,7 +105,7 @@ $script:Bodies = @{
             $res = Invoke-TkCleanApps -Plan $a.Plan -Apply
             Write-TkLog ('Clean apps: {0} removed, {1} blocked, {2} with errors.' -f $res.AppsRemoved, $res.Blocked, $res.Failed)
         }
-        $null = Start-TkUpgrade -Config $a.Config -AllowUnsupported ([bool]$a.Unsupported) -NoRestart $false -CleanAfter ([bool]$a.CleanToo) -Profile $a.Profile -OrganizationPath ([string]$a.Org)
+        $null = Start-TkUpgrade -Config $a.Config -AllowUnsupported ([bool]$a.Unsupported) -NoRestart $false -CleanAfter ([bool]$a.CleanToo) -Include @($a.Plan.Include) -Exclude @($a.Plan.Exclude) -OrganizationPath ([string]$a.Org)
         Write-TkLog 'The upgrade is running in the background.'
         'started'
     }.ToString()

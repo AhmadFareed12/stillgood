@@ -73,7 +73,7 @@ function ConvertTo-TkReportHtml {
 
     if ($Report.Plan) {
         $p = $Report.Plan; $c = $p.Counts
-        Put "<h2>Clean apps preview: $(Esc $p.Profile) profile</h2><p>$(Esc $p.ProfileText)</p>"
+        Put "<h2>Clean apps preview</h2><p>Choices: $(Esc (Get-TkSelectionText $p)). Every app can be ticked or unticked in the window, or with -Include and -Exclude.</p>"
         Put "<p class=""counts""><b>$($c.Remove)</b> will be removed &middot; <b>$($c.Block)</b> blocked before they arrive &middot; $($c.Keep) kept &middot; $($c.Unknown) not in the catalog (kept) &middot; $($c.Protected) protected</p>"
         $sel = { param($a) @($p.Items | Where-Object { $_.Action -eq $a }) }
         Put '<h3>Will be removed, for every user and for new users</h3><table><tr><th>App</th><th>Package</th><th>Why</th><th>To put it back</th></tr>'
@@ -88,7 +88,7 @@ function ConvertTo-TkReportHtml {
             Put "<tr><td>$(Esc $where)</td><td><code>$(Esc $s.Name)</code></td><td>$(Esc $val)</td><td>$(Esc $s.Why)</td></tr>"
         }
         Put '</table>'
-        foreach ($sec in @(@('Keep', 'Kept by this profile'), @('Unknown', 'Not in the catalog, so kept'), @('Protected', 'Protected, never removed'))) {
+        foreach ($sec in @(@('Keep', 'Kept (not ticked, or never removed)'), @('Unknown', 'Not in the catalog, so kept'), @('Protected', 'Protected, never removed'))) {
             $list = @(& $sel $sec[0])
             Put "<details><summary>$(Esc $sec[1]) ($($list.Count))</summary><table><tr><th>App</th><th>Package</th><th>Why</th></tr>"
             foreach ($i in $list) { Put "<tr><td>$(Esc $i.Title)</td><td><code>$(Esc $i.Name)</code></td><td>$(Esc $i.Reason)</td></tr>" }
@@ -124,7 +124,7 @@ function Write-TkReportSummary {
     }
     if ($Report.Plan) {
         $c = $Report.Plan.Counts
-        Write-Host ("  Clean apps ({0}): {1} to remove, {2} to block ahead, {3} kept, {4} not in the catalog, {5} protected" -f $Report.Plan.Profile, $c.Remove, $c.Block, $c.Keep, $c.Unknown, $c.Protected)
+        Write-Host ("  Clean apps ({0}): {1} to remove, {2} to block ahead, {3} kept, {4} not in the catalog, {5} protected" -f (Get-TkSelectionText $Report.Plan), $c.Remove, $c.Block, $c.Keep, $c.Unknown, $c.Protected)
     }
     if ($Paths) { Write-Host "  Report: $($Paths.Html)" -ForegroundColor Cyan }
     Write-Host ''

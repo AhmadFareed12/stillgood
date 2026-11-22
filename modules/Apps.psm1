@@ -4,7 +4,7 @@ Set-StrictMode -Version 2.0
 function Invoke-TkCleanApps {
     param([Parameter(Mandatory = $true)]$Plan, [switch]$Apply)
     if (-not $Apply) { throw 'Clean apps changes nothing without -Apply. Run the preview (Report) to see what it would do.' }
-    $run = Get-TkRun; if (-not $run) { $run = New-TkRun -Name "clean-apps-$($Plan.Profile)" }
+    $run = Get-TkRun; if (-not $run) { $run = New-TkRun -Name 'clean-apps' }
     Save-TkJson $Plan (Join-Path $run.Dir 'plan.json')
     $undoApps = New-Object System.Collections.ArrayList
     $undoBlocks = New-Object System.Collections.ArrayList
@@ -66,21 +66,21 @@ function Invoke-TkCleanApps {
 
     $undo = [pscustomobject]@{
         Kind = 'CleanAppsUndo'; Product = (Get-TkProduct).Name; Version = (Get-TkProduct).Version
-        Created = (Get-Date).ToString('s'); Computer = $env:COMPUTERNAME; Profile = $Plan.Profile
+        Created = (Get-Date).ToString('s'); Computer = $env:COMPUTERNAME; Choices = (Get-TkSelectionText $Plan)
         Apps = @($undoApps); Deprovisioned = @($undoBlocks); Registry = @($undoReg)
     }
     $undoPath = Join-Path $run.Dir 'undo.json'
     Save-TkJson $undo $undoPath
     $undoDir = Join-Path (Get-TkDataRoot) 'undo'
     New-Item -ItemType Directory -Path $undoDir -Force | Out-Null
-    Copy-Item -LiteralPath $undoPath -Destination (Join-Path $undoDir ('{0}-{1}.json' -f (Split-Path -Leaf $run.Dir), $Plan.Profile)) -Force
+    Copy-Item -LiteralPath $undoPath -Destination (Join-Path $undoDir ('{0}.json' -f (Split-Path -Leaf $run.Dir))) -Force
 
     # Check the result: anything planned for removal that is still here?
     $left = @($results | Where-Object { $_.Action -eq 'Remove' -and -not $_.Refused } | Where-Object {
         @(Invoke-TkSys 'FindAppx' @($_.Name)).Count -or @(Invoke-TkSys 'FindProvisioned' @($_.Name)).Count
     } | ForEach-Object { $_.Name })
     $summary = [pscustomobject]@{
-        Kind = 'CleanAppsResult'; Profile = $Plan.Profile; Finished = (Get-Date).ToString('s')
+        Kind = 'CleanAppsResult'; Choices = (Get-TkSelectionText $Plan); Finished = (Get-Date).ToString('s')
         AppsRemoved = @($results | Where-Object { $_.Removed -gt 0 }).Count
         AlreadyGone = @($results | Where-Object { $_.AlreadyGone }).Count
         Blocked = @($results | Where-Object { $_.Blocked }).Count
