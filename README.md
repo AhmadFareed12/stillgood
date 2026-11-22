@@ -144,12 +144,18 @@ The window itself is tested by hand on a lab VM: it is opened with `StillGood.cm
 
 ## Status
 
-**v0.3, preview.** All three blocks are built. Report and Clean apps are lab-proven. The Upgrade is built and its Setup command line is proven, but the full upgrade has not run in the lab yet, so treat it as experimental.
+**v0.3, preview.** All three blocks are built and lab-proven, including the full upgrade from Windows 10 with its restarts. Still a preview: one lab, English Windows, no fleet yet.
 
 **Proven in the lab (2026-11-22):**
-- **40 offline tests** against a fake PC (`tests/Run-Tests.ps1`).
-- **Windows Sandbox**, real Windows (`tests/Integration-Test.ps1`): 11 of 11 checks. These cover the stay-clean settings for a signed-out user and new users, the blocks, a second run that changes nothing, and Undo putting every value back.
-- **A fresh Windows 11 26H2 Pro VM**, Hyper-V with a virtual TPM. Clean apps ran as SYSTEM with a user signed in, the way an RMM tool runs it, and passed 12 of 12 checks with the kiosk profile:
+- **47 offline tests** against a fake PC (`tests/Run-Tests.ps1`).
+- **The full upgrade from Windows 10, on a PC that fails Microsoft's hardware check.** A Windows 10 22H2 Pro VM with UEFI but no TPM, started as SYSTEM the way an RMM tool runs it, with `-AllowUnsupportedHardware`:
+  - Clean apps first (office profile): 23 apps removed, 27 blocked before they arrive, no errors;
+  - the image copied and checked against its SHA-256, Setup's compatibility scan, Setup's restarts, and the first sign-in on Windows 11 26H2 (build 26300): 18 minutes in all;
+  - afterwards the 8.4 GB image was deleted, StillGood's scheduled tasks were gone and the unsupported-hardware registry value was removed again;
+  - none of the 27 apps came back with Windows 11, including Clipchamp and Dev Home, which a fresh 26H2 install adds for new users.
+- **The supported upgrade from Windows 10**, on the same Windows 10 22H2 with TPM 2.0 and Secure Boot, without the unsupported option: readiness "Supported", the same Clean apps result, Windows 11 26H2 in 16 minutes, then the image deleted, the tasks gone and none of the 27 apps back.
+- **Windows Sandbox**, real Windows (`tests/Integration-Test.ps1`): 13 of 13 checks. These cover the stay-clean settings for a signed-out user and new users, the blocks, a second run that changes nothing, and Undo putting every value back.
+- **A fresh Windows 11 26H2 Pro VM**, Hyper-V with a virtual TPM. Clean apps ran as SYSTEM with a user signed in, the way an RMM tool runs it, and passed 13 of 13 checks with the kiosk profile:
   - 31 apps removed for every user and new users, and the run log shows no removal outside the plan;
   - all 75 kept and protected apps untouched;
   - the settings applied for the signed-in user, new users and the machine;
@@ -158,10 +164,14 @@ The window itself is tested by hand on a lab VM: it is opened with `StillGood.cm
 - **Before and after on the same VM, office profile:** 16 apps removed and 18 blocked from coming back. Memory in use a minute after boot fell from 2,152 MB to 1,966 MB, and processes from 130 to 127. Boot time did not change (Windows' own measurement, one run each). On a new PC, StillGood buys control, not speed.
 - **Today's Windows 11 Setup accepts StillGood's exact command line,** including `/eula accept` and `/product server`. Both compatibility scans returned `0xC1900210` (no issues).
 
+**Found by the lab and fixed:** on Windows 10, removing an app for every user while it is still set up for new users fails at Windows' clean-up step (`0x80070002`), so every removal was reported as an error. StillGood now removes the new-user copy first, which takes every user's copy with it: no errors on Windows 10, 31 of 31 on Windows 11. The processor check also recognises Xeon E3/E5/E7 (v1 to v6) and the 2013-2016 Atom-class Celeron and Pentium as not on Microsoft's list; they used to show as unknown, which made the report say "probably supported".
+
+**Not covered by the lab:** PCs with legacy BIOS only, and processors older than Microsoft's list (a VM shows the host's processor). Those paths have offline tests only.
+
 **Still to prove before v1.0:**
-1. The full upgrade from Windows 10 22H2, on a VM with TPM 2.0 and on one without (unsupported option): download, stall and drop folder, sign-out during Setup, restart, the after-upgrade cleanup, a forced rollback.
-2. The "blocked before they arrive" markers stop Copilot, Outlook and Teams from arriving with that upgrade.
-3. A new user signs in after cleaning, Windows Update and a feature update run, and nothing returns.
+1. The download, stall and drop-folder paths (the lab VMs have no network), sign-out during Setup, and a forced rollback.
+2. The kiosk profile's blocks for Outlook (new) and Teams across an upgrade (the run above used the office profile, which keeps them), and Copilot's, which needs a networked VM: Copilot is not in the Windows 11 image.
+3. A new user signs in after cleaning, Windows Update and a later feature update run, and nothing returns.
 4. Reinstalling removed apps from the Store (needs a networked VM).
 5. Code signing, and pilot evidence from real PCs before any fleet claims.
 

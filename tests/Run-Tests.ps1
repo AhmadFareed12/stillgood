@@ -87,6 +87,10 @@ It 'reads processor names, and says Unknown rather than guess' {
         'AMD Ryzen 5 3600 6-Core Processor' = 'Pass'; 'AMD Ryzen 7 1700 Eight-Core Processor' = 'Fail'; 'AMD Ryzen 5 2600 Six-Core Processor' = 'Unknown'
         'AMD Ryzen AI 9 HX 370 w/ Radeon 890M' = 'Pass'; 'Intel(R) Core(TM) Ultra 7 155H' = 'Pass'; 'Intel(R) Core(TM) 5 120U' = 'Pass'
         'Intel(R) Celeron(R) N4020 CPU @ 1.10GHz' = 'Unknown'; 'AMD Ryzen 5 PRO 4650G with Radeon Graphics' = 'Pass'
+        # Processors of PCs upgraded in the field (names as Windows reports them):
+        'Intel(R) Xeon(R) CPU E5-1620 v3 @ 3.50GHz' = 'Fail'; 'Intel(R) Celeron(R) CPU  J1900  @ 1.99GHz' = 'Fail'; 'Intel(R) Core(TM) i5-6500T CPU @ 2.50GHz' = 'Fail'
+        'Intel(R) Xeon(R) CPU E3-1230 V2 @ 3.30GHz' = 'Fail'; 'Intel(R) Xeon(R) CPU E5-2670 0 @ 2.60GHz' = 'Fail'; 'Intel(R) Pentium(R) CPU N4200 @ 1.10GHz' = 'Fail'
+        'Intel(R) Celeron(R) J4105 CPU @ 1.50GHz' = 'Unknown'; 'Intel(R) Xeon(R) E-2124 CPU @ 3.30GHz' = 'Unknown'
     }
     foreach ($k in $cases.Keys) { Should-Be (Get-TkCpuSupport -Name $k).Status $cases[$k] $k }
 }
@@ -193,14 +197,25 @@ It 'keeps going when one removal fails, and says so' {
     Should-BeTrue (@($res.StillPresent) -contains 'Microsoft.GamingApp') 'Xbox reported as still present'
     Should-BeTrue (Test-Called 'RemoveAppx Microsoft.BingNews_*') 'the rest still ran'
 }
-It 'does not count it as an error when Windows already removed the new-user copy (24H2 and later)' {
+It 'removes the new-user copy first, which takes every user''s copy with it (Windows 10 and 11)' {
     $inv = New-StandardPc
-    $global:Fake.AllUsersRemovesProvisioned = $true
+    $global:Fake.ProvisionedRemovesInstalled = $true
     $res = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office') -Apply
     Should-Be $res.Failed 0 'items with errors'
-    Should-BeFalse (Test-Called 'RemoveProvisioned Microsoft.BingNews_*') 'no second removal for an app already gone'
-    Should-BeTrue (Test-Called 'RemoveProvisioned Clipchamp.Clipchamp_*') 'apps only set up for new users are still removed'
+    Should-BeTrue (Test-Called 'RemoveProvisioned Microsoft.BingNews_*') 'News removed for new users'
+    Should-BeFalse (Test-Called 'RemoveAppx Microsoft.BingNews_*') 'no second removal for an app already gone'
+    Should-BeTrue (Test-Called 'RemoveAppx Microsoft.GamingApp_*') 'apps installed but not set up for new users still removed'
     Should-Be @($res.StillPresent).Count 0 'left over'
+}
+It 'never removes an app for every user while it is still set up for new users (that fails on Windows 10)' {
+    $inv = New-StandardPc
+    $null = Invoke-TkCleanApps -Plan (New-TkCleanPlan -Inventory $inv -Catalog $catalog -Profile 'office') -Apply
+    $calls = @($global:Fake.Calls | ForEach-Object { "$_" }); $p = -1; $a = -1
+    for ($i = 0; $i -lt $calls.Count; $i++) {
+        if ($p -lt 0 -and $calls[$i] -clike 'RemoveProvisioned Microsoft.BingNews_*') { $p = $i }
+        if ($a -lt 0 -and $calls[$i] -clike 'RemoveAppx Microsoft.BingNews_*') { $a = $i }
+    }
+    Should-BeTrue ($p -ge 0 -and $a -gt $p) 'new-user copy first, then every user'
 }
 It 'refuses a forged plan at the last moment' {
     Install-FakeSystem -Appx @((New-FakePkg 'Microsoft.DesktopAppInstaller'), (New-FakePkg 'Microsoft.BingNews' -NonRemovable))
@@ -288,6 +303,13 @@ It 'checks the upgrade settings file' {
     Set-Content -LiteralPath $c -Value ('{"source":"\\\\srv\\w11.iso","sha256":"' + ('a' * 64) + '"}')
     $cfg = Get-TkUpgradeConfig -Path $c
     Should-Be $cfg.Images[0].Sha256 ('A' * 64) 'upper case'; Should-Be $cfg.Images[0].Culture '*' 'single image offered to any language'; Should-Be $cfg.StallMinutes 10 'default stall time'
+    Set-Content -LiteralPath $c -Value ('{"source":"w11.iso","sha256":"' + ('a' * 64) + '"}')
+    Should-Throw { Get-TkUpgradeConfig -Path $c } '*full path (D:\...)*'
+    # Seen in the lab: a path from a remote session, written by Windows PowerShell's ConvertTo-Json.
+    Set-Content -LiteralPath $c -Value ('{"images":{"en-US":{"source":{"value":"D:\\w11.iso","PSComputerName":"pc1"},"sha256":"' + ('a' * 64) + '"}}}')
+    Should-Throw { Get-TkUpgradeConfig -Path $c } '*in quotes*'
+    Set-Content -LiteralPath $c -Value ('{"source":"D:\\w11.iso","sha256":"' + ('a' * 64) + '"}')
+    Should-Be (Get-TkUpgradeConfig -Path $c).Images[0].Source 'D:\w11.iso' 'a drive path'
 }
 It 'picks the upgrade image in the PC''s own Windows language' {
     $c = Join-Path $tmp 'up-lang.json'

@@ -31,6 +31,21 @@ function Get-TkCpuSupport {
         if ($gen -ge 8) { return [pscustomobject]@{ Status = 'Pass'; Generation = "Intel gen $gen" } }
         return [pscustomobject]@{ Status = 'Fail'; Generation = "Intel gen $gen" }
     }
+    # Intel Xeon E3, E5 and E7, versions 1 to 6 (2011-2017): none are on the list. (Xeon E-2xxx, a later family, is not matched.)
+    $m = & $rx 'Xeon\(R\)\s+CPU\s+E([357])-\d{4}\w*(?:\s+v(\d))?'
+    if ($m.Success) {
+        $v = 1; if ($m.Groups[2].Success) { $v = [int]$m.Groups[2].Value }
+        return [pscustomobject]@{ Status = 'Fail'; Generation = "Intel Xeon E$($m.Groups[1].Value) v$v" }
+    }
+    # Atom-class Celeron and Pentium of 2013-2016 (Bay Trail, Braswell, Apollo Lake): J1/J2/N2/N3/J3 models, Pentium N4200
+    # and J4205. Their successors (J4105, N4020 and on) are on the list for some models, so they stay Unknown here.
+    $m = & $rx '(Celeron|Pentium)\(R\)\s+(?:Silver\s+)?(?:CPU\s+)?([JN]\d{4})'
+    if ($m.Success) {
+        $model = $m.Groups[2].Value.ToUpperInvariant()
+        if ([regex]::IsMatch($model, '^(J1|J2|N2|N3|J3)\d{3}$') -or @('N4200', 'J4205') -contains $model) {
+            return [pscustomobject]@{ Status = 'Fail'; Generation = "Intel $($m.Groups[1].Value) $model (2013-2016)" }
+        }
+    }
     if ((& $rx 'Ryzen AI').Success) { return [pscustomobject]@{ Status = 'Pass'; Generation = 'Ryzen AI' } }
     $m = & $rx 'Ryzen\s+(?:Threadripper\s+)?(?:PRO\s+)?[3579]\s+(?:PRO\s+)?(\d)\d{3}'
     if ($m.Success) {

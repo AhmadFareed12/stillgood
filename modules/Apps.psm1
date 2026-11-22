@@ -28,12 +28,9 @@ function Invoke-TkCleanApps {
                 [void]$results.Add($r); continue
             }
             if (-not $live.Count -and -not $prov.Count) { $r.AlreadyGone = $true; Write-TkLog "$($item.Title): already gone" }
-            foreach ($pkg in $live) {
-                try { Invoke-TkSys 'RemoveAppx' @($pkg.PackageFullName); $r.Removed++; Write-TkLog "Removed $($pkg.PackageFullName) for every user" 'Ok' }
-                catch { $r.Failed++; $r.Errors += "$($pkg.PackageFullName): $($_.Exception.Message)"; Write-TkLog "Could not remove $($pkg.PackageFullName): $($_.Exception.Message)" 'Warn' }
-            }
-            # Windows 11 24H2 and later remove the new-user copy together with the all-users removal: look again first.
-            if ($live.Count) { $prov = @(Invoke-TkSys 'FindProvisioned' @($item.Name)) }
+            # The new-user copy first. On Windows 10, removing an app for every user while it is still set up for new
+            # users fails at Windows' clean-up step ("DeStage", 0x80070002, seen in the lab on 22H2); removing the
+            # new-user copy first takes every user's copy with it, cleanly, on Windows 10 and 11.
             foreach ($pv in $prov) {
                 try { Invoke-TkSys 'RemoveProvisioned' @($pv.PackageName); $r.Removed++; Write-TkLog "Removed $($pv.PackageName) for new users" 'Ok' }
                 catch {
@@ -41,6 +38,17 @@ function Invoke-TkCleanApps {
                     if ($still.Count) { $r.Failed++; $r.Errors += "$($pv.PackageName): $($_.Exception.Message)"; Write-TkLog "Could not remove $($pv.PackageName) for new users: $($_.Exception.Message)" 'Warn' }
                     else { Write-TkLog "$($pv.PackageName) was already gone for new users" }
                 }
+            }
+            # Then whatever is still installed for someone: apps never set up for new users, or a Windows whose
+            # new-user removal leaves the installed copies. Only packages the guard checked above.
+            if ($prov.Count -and $live.Count) {
+                $checked = @($live | ForEach-Object { $_.PackageFullName })
+                $live = @(Invoke-TkSys 'FindAppx' @($item.Name) | Where-Object { $checked -contains $_.PackageFullName })
+                if (-not $live.Count) { Write-TkLog "$($item.Title): removed for every user together with the new-user copy" 'Ok' }
+            }
+            foreach ($pkg in $live) {
+                try { Invoke-TkSys 'RemoveAppx' @($pkg.PackageFullName); $r.Removed++; Write-TkLog "Removed $($pkg.PackageFullName) for every user" 'Ok' }
+                catch { $r.Failed++; $r.Errors += "$($pkg.PackageFullName): $($_.Exception.Message)"; Write-TkLog "Could not remove $($pkg.PackageFullName): $($_.Exception.Message)" 'Warn' }
             }
         }
         # Mark the family so new users and feature updates do not bring it back.

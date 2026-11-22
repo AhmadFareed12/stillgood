@@ -77,7 +77,7 @@ function Install-FakeSystem {
         Appx = (New-List $Appx); Prov = (New-List $Prov); Reg = @{}; Keys = @{}
         Profiles = @($Profiles); Loaded = (New-List $Loaded); Files = @{}; Calls = (New-List @())
         FailRemove = @($FailRemove); Os = (New-FakeOs); ExitCodes = (New-List @()); LastBoot = [datetime]'2026-11-01T08:00:00'
-        SetupCpu = $null; Now = [datetime]'2026-11-21T10:00:00'; AllUsersRemovesProvisioned = $false
+        SetupCpu = $null; Now = [datetime]'2026-11-21T10:00:00'; ProvisionedRemovesInstalled = $false
         Download = { param($Source, $Destination, $OnProgress) [pscustomobject]@{ Ok = $false; Stalled = $true; Error = 'fake stall' } }
     }
     foreach ($p in @($Profiles)) { $global:Fake.Files[(Join-Path $p.Path 'NTUSER.DAT')] = $true }
@@ -90,17 +90,17 @@ function Install-FakeSystem {
             param($FullName)
             [void]$global:Fake.Calls.Add("RemoveAppx $FullName")
             if ($global:Fake.FailRemove -contains $FullName) { throw 'Removal failed (fake)' }
-            foreach ($i in @($global:Fake.Appx | Where-Object { $_.PackageFullName -eq $FullName })) {
-                $global:Fake.Appx.Remove($i)
-                # Windows 11 24H2+: removing for all users also removes the new-user copy.
-                if ($global:Fake.AllUsersRemovesProvisioned) { foreach ($p in @($global:Fake.Prov | Where-Object { $_.DisplayName -eq $i.Name })) { $global:Fake.Prov.Remove($p) } }
-            }
+            foreach ($i in @($global:Fake.Appx | Where-Object { $_.PackageFullName -eq $FullName })) { $global:Fake.Appx.Remove($i) }
         }
         FindProvisioned   = { param($Name) @($global:Fake.Prov | Where-Object { $_.DisplayName -eq $Name }) }
         RemoveProvisioned = {
             param($PackageName)
             [void]$global:Fake.Calls.Add("RemoveProvisioned $PackageName")
-            foreach ($i in @($global:Fake.Prov | Where-Object { $_.PackageName -eq $PackageName })) { $global:Fake.Prov.Remove($i) }
+            foreach ($i in @($global:Fake.Prov | Where-Object { $_.PackageName -eq $PackageName })) {
+                $global:Fake.Prov.Remove($i)
+                # Real Windows 10 (1803+) and 11, with -AllUsers: the installed copies go with the new-user copy.
+                if ($global:Fake.ProvisionedRemovesInstalled) { foreach ($x in @($global:Fake.Appx | Where-Object { $_.Name -eq $i.DisplayName })) { $global:Fake.Appx.Remove($x) } }
+            }
         }
         RegGet            = {
             param($Key, $Name)

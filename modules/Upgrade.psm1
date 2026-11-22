@@ -34,6 +34,11 @@ function Get-TkUpgradeConfig {
         param($label, $src, $sha)
         $sha = ([string]$sha).Trim().ToUpperInvariant()
         if (-not $src) { throw "$Path`: the $label image has no 'source' (where to get it)." }
+        # Text, in a form every PC reads the same way. (An object here usually means a script wrote the file with
+        # Windows PowerShell's ConvertTo-Json from a value that came out of a remote session: {"value": ...}.)
+        if ($src -isnot [string] -or -not (Test-TkMatch $src '^(https?://|\\\\[^\\]|[A-Z]:\\)')) {
+            throw "$Path`: the $label image's source must be a web address (https://...), a share (\\server\share\...) or a full path (D:\...), in quotes. Found: $src"
+        }
         if ($sha -notmatch '^[0-9A-F]{64}$') { throw "$Path`: the $label image needs its SHA-256 (64 hex characters) from Microsoft's download page." }
         return $sha
     }
