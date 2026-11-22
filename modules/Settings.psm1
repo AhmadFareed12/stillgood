@@ -17,7 +17,7 @@ function Get-TkUserHives {
             [void]$list.Add([pscustomobject]@{ Kind = 'User'; Sid = $p.Sid; Path = $p.Path; File = $file; Root = "HKU\TK_$($p.Sid)"; Loaded = $false })
         }
     }
-    $defPath = Join-Path $env:SystemDrive 'Users\Default'
+    $defPath = [string](Invoke-TkSys 'GetDefaultProfile')
     $defFile = Join-Path $defPath 'NTUSER.DAT'
     if (Invoke-TkSys 'TestPath' @($defFile)) {
         [void]$list.Add([pscustomobject]@{ Kind = 'Default'; Sid = 'Default'; Path = $defPath; File = $defFile; Root = 'HKU\TK_Default'; Loaded = $false })

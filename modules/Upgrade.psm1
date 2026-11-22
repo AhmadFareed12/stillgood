@@ -10,17 +10,77 @@ function Get-TkUpgradePaths {
     }
 }
 
+$script:LanguageNames = $null
+
+function Get-TkLanguageName {
+    # The name Microsoft's download page gives an image language (catalog\languages.json), e.g. he-IL -> Hebrew.
+    param([string]$Culture)
+    if (-not $script:LanguageNames) {
+        $script:LanguageNames = @{}
+        $f = Join-Path (Split-Path -Parent $PSScriptRoot) 'catalog\languages.json'
+        if (Test-Path -LiteralPath $f) { foreach ($p in (Read-TkJson $f).languages.PSObject.Properties) { $script:LanguageNames[$p.Name] = [string]$p.Value } }
+    }
+    if ($Culture -and $script:LanguageNames.ContainsKey($Culture)) { return $script:LanguageNames[$Culture] }
+    try { return [System.Globalization.CultureInfo]::GetCultureInfo($Culture).EnglishName } catch { return $Culture }
+}
+
 function Get-TkUpgradeConfig {
+    # upgrade.json lists one image per Windows language under "images" (an in-place upgrade needs an image in the PC's
+    # own install language). The older single "source" + "sha256" form still works and is offered to every PC.
     param([Parameter(Mandatory = $true)][string]$Path)
     $c = Read-TkJson $Path
-    $src = [string](Get-TkProp $c 'source')
-    $sha = ([string](Get-TkProp $c 'sha256')).Trim().ToUpperInvariant()
-    if (-not $src) { throw "$Path has no 'source' (where to get the Windows 11 image)." }
-    if ($sha -notmatch '^[0-9A-F]{64}$') { throw "$Path needs the image's SHA-256 (64 hex characters) from Microsoft's download page." }
+    $images = New-Object System.Collections.ArrayList
+    $check = {
+        param($label, $src, $sha)
+        $sha = ([string]$sha).Trim().ToUpperInvariant()
+        if (-not $src) { throw "$Path`: the $label image has no 'source' (where to get it)." }
+        if ($sha -notmatch '^[0-9A-F]{64}$') { throw "$Path`: the $label image needs its SHA-256 (64 hex characters) from Microsoft's download page." }
+        return $sha
+    }
+    $im = Get-TkProp $c 'images'
+    if ($im) {
+        foreach ($p in $im.PSObject.Properties) {
+            $sha = & $check $p.Name (Get-TkProp $p.Value 'source') (Get-TkProp $p.Value 'sha256')
+            [void]$images.Add([pscustomobject]@{ Culture = $p.Name; Source = [string](Get-TkProp $p.Value 'source'); Sha256 = $sha })
+        }
+    }
+    if (Get-TkProp $c 'source') {
+        $sha = & $check 'single' (Get-TkProp $c 'source') (Get-TkProp $c 'sha256')
+        [void]$images.Add([pscustomobject]@{ Culture = '*'; Source = [string](Get-TkProp $c 'source'); Sha256 = $sha })
+    }
+    if (-not $images.Count) { throw "$Path lists no Windows 11 image. Add one under ""images"", keyed by Windows language (for example en-US)." }
     $du = Get-TkProp $c 'dynamicUpdate'; if ($null -eq $du) { $du = $true }
     $stall = Get-TkProp $c 'stallMinutes'; if (-not $stall) { $stall = 10 }
     $wait = Get-TkProp $c 'dropFolderWaitHours'; if (-not $wait) { $wait = 24 }
-    return [pscustomobject]@{ Source = $src; Sha256 = $sha; DynamicUpdate = [bool]$du; StallMinutes = [int]$stall; DropFolderWaitHours = [double]$wait }
+    return [pscustomobject]@{ Images = @($images); DynamicUpdate = [bool]$du; StallMinutes = [int]$stall; DropFolderWaitHours = [double]$wait }
+}
+
+function Resolve-TkUpgradeImage {
+    # Picks the image for a PC by the language Windows was installed in: the exact language first, then the only image
+    # of the same base language (Arabic, German ...; never across English, French, Spanish, Portuguese or Chinese
+    # variants, which are separate images), then a single any-language image. Otherwise it refuses, naming the image.
+    param([Parameter(Mandatory = $true)]$Config, [string]$Culture)
+    $imgs = @($Config.Images)
+    $hit = @($imgs | Where-Object { $_.Culture -eq $Culture } | Select-Object -First 1)
+    if (-not $hit.Count -and $Culture) {
+        $base = ($Culture -split '-')[0]
+        if (@('en', 'fr', 'es', 'pt', 'zh') -notcontains $base) {
+            $same = @($imgs | Where-Object { $_.Culture -ne '*' -and ($_.Culture -split '-')[0] -eq $base })
+            if ($same.Count -eq 1) { $hit = $same }
+        }
+    }
+    $any = $false
+    if (-not $hit.Count) { $hit = @($imgs | Where-Object { $_.Culture -eq '*' } | Select-Object -First 1); $any = [bool]$hit.Count }
+    $name = Get-TkLanguageName $Culture
+    if (-not $hit.Count) {
+        $have = (@($imgs | ForEach-Object { "$(Get-TkLanguageName $_.Culture) ($($_.Culture))" }) -join ', ')
+        throw "This PC's Windows is $name ($Culture), and the upgrade settings have no image in that language (they have: $have). Download the '$name' image from Microsoft's Windows 11 page and add it under images.$Culture."
+    }
+    $img = $hit[0]
+    return [pscustomobject]@{
+        Culture = $Culture; LanguageName = $name; AnyLanguage = $any; Source = $img.Source; Sha256 = $img.Sha256
+        DynamicUpdate = $Config.DynamicUpdate; StallMinutes = $Config.StallMinutes; DropFolderWaitHours = $Config.DropFolderWaitHours
+    }
 }
 
 function Get-TkSetupArguments {
@@ -153,10 +213,12 @@ function Test-TkImageHash {
 }
 
 function Initialize-TkDropFolder {
-    param([string]$Folder, [string]$Sha256)
+    param([string]$Folder, [string]$Sha256, [string]$Language)
     New-Item -ItemType Directory -Path $Folder -Force | Out-Null
+    $which = 'the Windows 11 image (.iso)'
+    if ($Language) { $which = "the $Language Windows 11 image (.iso), the language this PC's Windows was installed in" }
     $text = @(
-        'Put the Windows 11 image (.iso) in this folder.', '',
+        "Put $which in this folder.", '',
         "It must be Microsoft's image with this SHA-256: $Sha256",
         "Microsoft's Windows 11 download page lists the SHA-256 of each language's image under 'Verify your download'.", '',
         'Any file name works. The upgrade continues on its own within a minute or two of the file arriving.',
@@ -220,7 +282,7 @@ function Get-TkImage {
         Write-TkLog 'The downloaded image was deleted because it does not match.' 'Warn'
     } else { Write-TkLog "The download did not finish: $($r.Error)" 'Warn' }
 
-    Initialize-TkDropFolder -Folder $paths.Drop -Sha256 $Config.Sha256
+    Initialize-TkDropFolder -Folder $paths.Drop -Sha256 $Config.Sha256 -Language ([string](Get-TkProp $Config 'LanguageName'))
     Write-TkUpgradeState 'WaitingForImage' "The download did not finish. Copy the Windows 11 image into $($paths.Drop) - the READ ME there says which one." @{ DropFolder = $paths.Drop }
     return (Wait-TkDroppedImage -Folder $paths.Drop -Sha256 $Config.Sha256 -Hours $Config.DropFolderWaitHours)
 }

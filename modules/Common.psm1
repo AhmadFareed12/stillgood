@@ -20,11 +20,38 @@ function Get-TkProp {
     return $null
 }
 
+$script:Invariant = [System.Globalization.CultureInfo]::InvariantCulture
+$script:LikeOptions = [System.Management.Automation.WildcardOptions]'IgnoreCase, CultureInvariant'
+
 function Test-TkLike {
+    # Wildcard match that behaves the same in every Windows language. (PowerShell's -like follows the PC's culture:
+    # on Turkish Windows "WINDOWS" -like "windows*" is false, because Turkish has a dotted and a dotless i.)
     param([string]$Value, [string[]]$Patterns)
     if (-not $Value) { return $false }
-    foreach ($p in $Patterns) { if ($p -and $Value -like $p) { return $true } }
+    foreach ($p in $Patterns) { if ($p -and ([System.Management.Automation.WildcardPattern]::new($p, $script:LikeOptions)).IsMatch($Value)) { return $true } }
     return $false
+}
+
+function Test-TkMatch {
+    # Regular-expression match that behaves the same in every Windows language (see Test-TkLike).
+    param([string]$Value, [string]$Pattern)
+    return [regex]::IsMatch([string]$Value, $Pattern, 'IgnoreCase, CultureInvariant')
+}
+
+function Get-TkStamp {
+    # Date stamps for file and folder names: always the Gregorian calendar, whatever the PC's region settings.
+    # (A custom date format follows the culture's calendar: Thai settings would give 2569, Persian 1405, Saudi 1448.)
+    return (Get-Date).ToString('yyyyMMdd-HHmmss', $script:Invariant)
+}
+
+function Get-TkOsLanguage {
+    # The language Windows was installed in (e.g. he-IL). An in-place upgrade needs an image in this same language.
+    $hex = Get-TkProp (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\Language' -ErrorAction SilentlyContinue) 'InstallLanguage'
+    $lcid = 0
+    if ($hex) { try { $lcid = [Convert]::ToInt32([string]$hex, 16) } catch { $lcid = 0 } }
+    if (-not $lcid) { try { $lcid = [int](Get-CimInstance Win32_OperatingSystem).OSLanguage } catch { $lcid = 0 } }
+    if (-not $lcid) { return '' }
+    try { return [System.Globalization.CultureInfo]::GetCultureInfo($lcid).Name } catch { return '' }
 }
 
 function Test-TkTestMode { return ($env:TK_TEST_MODE -eq '1') }
@@ -32,8 +59,7 @@ function Test-TkTestMode { return ($env:TK_TEST_MODE -eq '1') }
 function New-TkRun {
     param([Parameter(Mandatory = $true)][string]$Name, [string]$Root)
     if (-not $Root) { $Root = Join-Path (Get-TkDataRoot) 'runs' }
-    $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
-    $dir = Join-Path $Root "$stamp-$Name"
+    $dir = Join-Path $Root "$(Get-TkStamp)-$Name"
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $script:Run = [pscustomobject]@{
         Name = $Name; Dir = $dir; Started = (Get-Date)
@@ -85,6 +111,7 @@ function Get-TkOsInfo {
         Build          = $build
         Ubr            = Get-TkProp $cv 'UBR'
         DisplayVersion = Get-TkProp $cv 'DisplayVersion'
+        Language       = Get-TkOsLanguage
         IsWindows11    = ($build -ge 22000)
         IsServer       = ($os.ProductType -ne 1)
         Is64Bit        = [Environment]::Is64BitOperatingSystem

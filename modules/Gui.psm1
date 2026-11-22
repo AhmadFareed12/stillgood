@@ -134,12 +134,12 @@ function Start-TkUiClean {
 }
 
 function Show-TkUpgradeSettings {
-    # Asks once where the Windows 11 image is and its SHA-256, then saves config\upgrade.json.
-    param($Current)
+    # Asks where the Windows 11 image in this PC's language is, and its SHA-256.
+    param([string]$Language, $Current)
     $d = New-Object System.Windows.Forms.Form
     $d.Text = 'StillGood - the Windows 11 image'; $d.Size = New-Object System.Drawing.Size(640, 330); $d.StartPosition = 'CenterParent'
     $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false; $d.Font = $script:Ui.Form.Font
-    $help = New-TkCtl Label "Download the image once from Microsoft's Windows 11 page (Download Windows 11 Disk Image (ISO) for x64 devices). The same page lists its SHA-256 under 'Verify your download'. For many PCs, put the file on a share and give the share path." 16 12 590 60
+    $help = New-TkCtl Label "This PC's Windows was installed in $Language, so it needs the $Language image. Download it once from Microsoft's Windows 11 page (Download Windows 11 Disk Image (ISO) for x64 devices); the same page lists its SHA-256 under 'Verify your download'. For many PCs, put it on a share." 16 12 590 60
     $l1 = New-TkCtl Label 'Image: a file, a share path or a web address' 16 80 400 20
     $src = New-TkCtl TextBox '' 16 102 480 26
     $browse = New-TkCtl Button 'Browse...' 504 101 100 28
@@ -159,18 +159,27 @@ function Show-TkUpgradeSettings {
     return [pscustomobject]@{ Source = $src.Text.Trim(); Sha256 = $sha.Text.Trim().ToUpperInvariant() }
 }
 
-function Get-TkUiUpgradeConfig {
+function Get-TkUiUpgradeImage {
+    # The image for this PC's Windows language, from config\upgrade.json. If there is none yet, ask for it and add it.
     $path = Join-Path $script:Ui.Root 'config\upgrade.json'
-    $current = $null
+    $culture = Get-TkOsLanguage
+    $lang = "$(Get-TkLanguageName $culture) ($culture)"
+    $raw = $null
     if (Test-Path -LiteralPath $path) {
-        try { return (Get-TkUpgradeConfig -Path $path) } catch { Show-TkUiError "config\upgrade.json needs fixing: $($_.Exception.Message)" }
-        try { $current = Read-TkJson $path; $current = [pscustomobject]@{ Source = Get-TkProp $current 'source'; Sha256 = Get-TkProp $current 'sha256' } } catch { }
+        try { $raw = Read-TkJson $path; return (Resolve-TkUpgradeImage -Config (Get-TkUpgradeConfig -Path $path) -Culture $culture) }
+        catch { Show-TkUiInfo $_.Exception.Message }
     }
-    $r = Show-TkUpgradeSettings -Current $current
+    $r = Show-TkUpgradeSettings -Language $lang
     if (-not $r) { return $null }
+    $images = [ordered]@{}
+    if ($raw -and (Get-TkProp $raw 'images')) { foreach ($p in $raw.images.PSObject.Properties) { $images[$p.Name] = $p.Value } }
+    $images[$culture] = [pscustomobject]@{ source = $r.Source; sha256 = $r.Sha256 }
+    $obj = [ordered]@{ about = 'Windows 11 images by Windows language. Written by the StillGood window.'; images = [pscustomobject]$images }
+    foreach ($k in @('dynamicUpdate', 'stallMinutes', 'dropFolderWaitHours')) { $v = $null; if ($raw) { $v = Get-TkProp $raw $k }; if ($null -ne $v) { $obj[$k] = $v } }
     New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
-    Save-TkJson ([pscustomobject][ordered]@{ about = 'Written by the StillGood window.'; source = $r.Source; sha256 = $r.Sha256; dynamicUpdate = $true; stallMinutes = 10; dropFolderWaitHours = 24 }) $path
-    return (Get-TkUpgradeConfig -Path $path)
+    Save-TkJson ([pscustomobject]$obj) $path
+    try { return (Resolve-TkUpgradeImage -Config (Get-TkUpgradeConfig -Path $path) -Culture $culture) }
+    catch { Show-TkUiError "config\upgrade.json needs fixing: $($_.Exception.Message)"; return $null }
 }
 
 function Start-TkUiUpgrade {
@@ -180,7 +189,7 @@ function Start-TkUiUpgrade {
     $rd = $ui.Scan.Readiness
     if ($rd.Verdict -eq 'NotUpgradeable') { Show-TkUiError ("This PC cannot run Windows 11:`r`n- " + (@($rd.Blockers) -join "`r`n- ")); return }
     if ($rd.Verdict -eq 'FixFirst') { Show-TkUiError ("Fix these first, then try again:`r`n- " + (@($rd.Fixable) -join "`r`n- ")); return }
-    $cfg = Get-TkUiUpgradeConfig
+    $cfg = Get-TkUiUpgradeImage
     if (-not $cfg) { return }
     $unsupported = $false
     if ($rd.Verdict -eq 'UnsupportedButUpgradeable') {
@@ -188,7 +197,7 @@ function Start-TkUiUpgrade {
         if (-not (Confirm-TkUi $m 'Warning')) { return }
         $unsupported = $true
     }
-    $steps = "The upgrade will:`r`n1. Get the image from $($cfg.Source) and check it against its SHA-256.`r`n2. Run Windows Setup's compatibility scan. If it finds a blocker, it stops and nothing changes.`r`n3. Upgrade in the background, keeping files, apps and settings. Signing out does not stop it.`r`n4. Restart the PC on its own when Setup is ready, so save open work first.`r`n5. At the first sign-in on the new Windows, delete the image"
+    $steps = "The upgrade will:`r`n1. Get the $($cfg.LanguageName) image from $($cfg.Source) and check it against its SHA-256.`r`n2. Run Windows Setup's compatibility scan. If it finds a blocker, it stops and nothing changes.`r`n3. Upgrade in the background, keeping files, apps and settings. Signing out does not stop it.`r`n4. Restart the PC on its own when Setup is ready, so save open work first.`r`n5. At the first sign-in on the new Windows, delete the image"
     if ($CleanToo) { $steps += ' and clean the apps Windows 11 brings' }
     $steps += ".`r`n`r`nRunning Setup accepts the Microsoft Software License Terms for Windows 11 on this PC.`r`n`r`nStart the upgrade?"
     if (-not (Confirm-TkUi $steps)) { return }

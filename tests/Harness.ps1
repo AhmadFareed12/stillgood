@@ -29,6 +29,13 @@ function Should-Throw {
     throw "expected an error like '$Like', but nothing was thrown"
 }
 
+function Use-Culture {
+    # Runs $Body as if the PC's region format were $Name (dates, number formats, text comparison).
+    param([string]$Name, [scriptblock]$Body)
+    $t = [System.Threading.Thread]::CurrentThread; $old = $t.CurrentCulture
+    try { $t.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Name); & $Body } finally { $t.CurrentCulture = $old }
+}
+
 function New-List { param($Items) $l = New-Object System.Collections.ArrayList; foreach ($i in @($Items)) { if ($null -ne $i) { [void]$l.Add($i) } }; return , $l }
 
 function New-FakePkg {
@@ -121,6 +128,7 @@ function Install-FakeSystem {
         RegDeleteKey      = { param($Key) Assert-TkRegistryWrite -Path $Key; $global:Fake.Keys.Remove((Get-FakeKey $Key)); [void]$global:Fake.Calls.Add("RegDeleteKey $(Get-FakeKey $Key)") }
         GetProfiles       = { @($global:Fake.Profiles) }
         GetLoadedHives    = { @($global:Fake.Loaded) }
+        GetDefaultProfile = { Join-Path $env:SystemDrive 'Users\Default' }
         HiveLoad          = { param($Mount, $File) [void]$global:Fake.Loaded.Add($Mount.Substring(4)); [void]$global:Fake.Calls.Add("HiveLoad $Mount") }
         HiveUnload        = { param($Mount) $global:Fake.Loaded.Remove($Mount.Substring(4)); [void]$global:Fake.Calls.Add("HiveUnload $Mount") }
         TestPath          = { param($Path) $global:Fake.Files.ContainsKey($Path) }

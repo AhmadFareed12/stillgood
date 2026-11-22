@@ -89,7 +89,10 @@ function Invoke-TkUpgradeMode {
     if (-not (Test-TkElevated)) { Write-Host '  The upgrade needs administrator rights.' -ForegroundColor Yellow; return 2 }
     $cfgPath = $Config; if (-not $cfgPath) { $cfgPath = Join-Path $PSScriptRoot 'config\upgrade.json' }
     if (-not (Test-Path -LiteralPath $cfgPath)) { Write-Host "  No upgrade settings at $cfgPath. Copy config\upgrade.example.json to config\upgrade.json and fill it in." -ForegroundColor Yellow; return 2 }
-    $cfg = Get-TkUpgradeConfig -Path $cfgPath
+    $all = Get-TkUpgradeConfig -Path $cfgPath
+    try { $cfg = Resolve-TkUpgradeImage -Config $all -Culture (Get-TkOsLanguage) }
+    catch { Write-Host "  $($_.Exception.Message)" -ForegroundColor Yellow; return 2 }
+    if ($cfg.AnyLanguage) { Write-Host "  The settings don't say which language the image is in. It must be $($cfg.LanguageName) ($($cfg.Culture)), this PC's Windows language, or Setup's scan refuses it (nothing changes)." -ForegroundColor Yellow }
     $r = Invoke-TkReportMode -RunName 'upgrade'
     $rd = $r.Readiness
     if ($rd.Verdict -eq 'NotUpgradeable') { Write-Host '  This PC cannot run Windows 11:' -ForegroundColor Red; @($rd.Blockers) | ForEach-Object { Write-Host "    - $_" }; return 2 }
@@ -101,7 +104,7 @@ function Invoke-TkUpgradeMode {
         if (-not $AllowUnsupportedHardware) { Write-Host '  To upgrade anyway, run again with -AllowUnsupportedHardware. The decision is yours.'; return 2 }
     }
     Write-Host '  The upgrade will:'
-    Write-Host "    1. Get the image from $($cfg.Source) and check it against the pinned SHA-256."
+    Write-Host "    1. Get the $($cfg.LanguageName) image from $($cfg.Source) and check it against the pinned SHA-256."
     Write-Host '       Time left is shown only for this step and the check, where it can be measured.'
     Write-Host '    2. Run Windows Setup''s compatibility scan. If it finds a blocker, it stops and nothing changes.'
     Write-Host '    3. Upgrade silently in the background, keeping files, apps and settings. Signing out does not stop it.'

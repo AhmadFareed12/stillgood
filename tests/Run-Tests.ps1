@@ -287,7 +287,42 @@ It 'checks the upgrade settings file' {
     Should-Throw { Get-TkUpgradeConfig -Path $c } '*SHA-256*'
     Set-Content -LiteralPath $c -Value ('{"source":"\\\\srv\\w11.iso","sha256":"' + ('a' * 64) + '"}')
     $cfg = Get-TkUpgradeConfig -Path $c
-    Should-Be $cfg.Sha256 ('A' * 64) 'upper case'; Should-Be $cfg.StallMinutes 10 'default stall time'
+    Should-Be $cfg.Images[0].Sha256 ('A' * 64) 'upper case'; Should-Be $cfg.Images[0].Culture '*' 'single image offered to any language'; Should-Be $cfg.StallMinutes 10 'default stall time'
+}
+It 'picks the upgrade image in the PC''s own Windows language' {
+    $c = Join-Path $tmp 'up-lang.json'
+    Set-Content -LiteralPath $c -Value ('{"images":{"en-US":{"source":"\\\\s\\en.iso","sha256":"' + ('A' * 64) + '"},"he-IL":{"source":"\\\\s\\he.iso","sha256":"' + ('B' * 64) + '"},"ar-SA":{"source":"\\\\s\\ar.iso","sha256":"' + ('C' * 64) + '"}}}')
+    $cfg = Get-TkUpgradeConfig -Path $c
+    $he = Resolve-TkUpgradeImage -Config $cfg -Culture 'he-IL'
+    Should-Be $he.Source '\\s\he.iso' 'Hebrew PC'; Should-Be $he.Sha256 ('B' * 64) 'Hebrew checksum'; Should-Be $he.LanguageName 'Hebrew' 'named like Microsoft does'
+    Should-Be (Resolve-TkUpgradeImage -Config $cfg -Culture 'ar-EG').Source '\\s\ar.iso' 'same base language, one image'
+    Should-Throw { Resolve-TkUpgradeImage -Config $cfg -Culture 'en-GB' } "*'English International' image*"
+    Should-Throw { Resolve-TkUpgradeImage -Config $cfg -Culture 'fr-FR' } "*'French' image*"
+    Set-Content -LiteralPath $c -Value ('{"source":"\\\\s\\w.iso","sha256":"' + ('D' * 64) + '"}')
+    $any = Resolve-TkUpgradeImage -Config (Get-TkUpgradeConfig -Path $c) -Culture 'de-DE'
+    Should-Be $any.Source '\\s\w.iso' 'older single-image settings still work'; Should-BeTrue $any.AnyLanguage 'and say the language is not stated'
+}
+It 'names every Microsoft image language, and falls back to Windows'' own name' {
+    Should-Be (Get-TkLanguageName 'pt-BR') 'Brazilian Portuguese' 'pt-BR'
+    Should-Be (Get-TkLanguageName 'sr-Latn-RS') 'Serbian Latin' 'sr-Latn-RS'
+    Should-Be (Get-TkLanguageName 'zh-TW') 'Chinese (Traditional)' 'zh-TW'
+    Should-Be (Get-TkLanguageName 'cy-GB') 'Welsh (United Kingdom)' 'a language Microsoft has no image for'
+    Should-Be @((Read-TkJson (Join-Path $root 'catalog\languages.json')).languages.PSObject.Properties).Count 38 'all 38 image languages listed'
+}
+It 'gives the same answers under Turkish, Thai, Saudi and Persian region settings' {
+    $year = [string](Get-Date).Year
+    foreach ($c in 'tr-TR', 'th-TH', 'ar-SA', 'fa-IR') {
+        Use-Culture $c {
+            Should-Be (Get-TkStamp).Substring(0, 4) $year "Gregorian file stamps in $c"
+            Should-BeTrue (Test-TkProtected -Name 'MICROSOFT.WINDOWS.SHELLEXPERIENCEHOST') "protected list matches in $c"
+            Should-BeTrue (Test-TkProtected -Name 'APPUP.INTELGRAPHICSEXPERIENCE') "driver apps protected in $c"
+            Should-Throw { Assert-TkRegistryWrite -Path 'HKLM\SOFTWARE\POLICIES\MICROSOFT\WINDOWS DEFENDER' -Name 'DisableAntiSpyware' } '*security*'
+            Assert-TkRegistryWrite -Path 'HKU\S-1-5-21-1-1001\SOFTWARE\MICROSOFT\WINDOWS\CURRENTVERSION\CONTENTDELIVERYMANAGER' -Name 'SILENTINSTALLEDAPPSENABLED'
+            $plan = New-TkCleanPlan -Inventory (New-FakeInventory -Appx @((New-FakePkg 'MICROSOFT.WINDOWSCALCULATOR'))) -Catalog $catalog -Profile 'kiosk'
+            Should-Be (Get-PlanItem $plan 'MICROSOFT.WINDOWSCALCULATOR').Action 'Remove' "catalog match in $c"
+            Should-Be (Get-TkCpuSupport -Name 'INTEL(R) CORE(TM) I5-8250U CPU @ 1.60GHZ').Status 'Pass' "processor read in $c"
+        }
+    }
 }
 It 'takes a dropped image only once it matches and has stopped growing' {
     $drop = Join-Path $tmp 'drop'; New-Item -ItemType Directory -Path $drop -Force | Out-Null

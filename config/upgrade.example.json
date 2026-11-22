@@ -1,7 +1,10 @@
 {
-  "about": "Copy this file to upgrade.json and fill it in. Get the image from Microsoft's Windows 11 download page ('Download Windows 11 Disk Image (ISO) for x64 devices'). The same page lists the SHA-256 of each language's image under 'Verify your download'. For a fleet, download it once and host it on a share or web server you control: Microsoft's links expire after 24 hours, and the pinned SHA-256 guarantees every PC gets Microsoft's exact image.",
-  "source": "\\\\fileserver\\installs\\Win11_English_x64.iso",
-  "sha256": "PASTE-THE-SHA-256-FROM-MICROSOFT-HERE",
+  "about": "Copy this file to upgrade.json and fill it in. An in-place upgrade needs a Windows 11 image in the language each PC's Windows was installed in, so list one image per language you have (keys like en-US, he-IL, ar-SA; catalog/languages.json lists all 38 and the names Microsoft's download page uses). Each PC picks its own. Get each image from Microsoft's Windows 11 page ('Download Windows 11 Disk Image (ISO) for x64 devices'); the same page lists every image's SHA-256 under 'Verify your download'. For a fleet, download once and host the files on a share or web server you control: Microsoft's links expire after 24 hours, and the pinned SHA-256 guarantees every PC gets Microsoft's exact image.",
+  "images": {
+    "en-US": { "source": "\\\\fileserver\\installs\\Win11_English_x64.iso", "sha256": "PASTE-THE-SHA-256-FROM-MICROSOFT-HERE" },
+    "he-IL": { "source": "\\\\fileserver\\installs\\Win11_Hebrew_x64.iso", "sha256": "PASTE-THE-SHA-256-FROM-MICROSOFT-HERE" },
+    "ar-SA": { "source": "\\\\fileserver\\installs\\Win11_Arabic_x64.iso", "sha256": "PASTE-THE-SHA-256-FROM-MICROSOFT-HERE" }
+  },
   "dynamicUpdate": true,
   "stallMinutes": 10,
   "dropFolderWaitHours": 24

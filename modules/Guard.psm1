@@ -58,8 +58,8 @@ function Test-TkProtected {
     if ($IsFramework) { return 'a framework or runtime' }
     if ($NonRemovable) { return 'Windows marks it as non-removable' }
     if ($SignatureKind -eq 'System') { return 'part of Windows (a system component)' }
-    foreach ($p in $script:Protected) { if ($Name -like $p) { return "on the protected list ($p)" } }
-    foreach ($p in $script:OrgKeep) { if ($Name -like $p) { return "kept by your organization file ($p)" } }
+    foreach ($p in $script:Protected) { if (Test-TkLike $Name @($p)) { return "on the protected list ($p)" } }
+    foreach ($p in $script:OrgKeep) { if (Test-TkLike $Name @($p)) { return "kept by your organization file ($p)" } }
     return $null
 }
 
@@ -93,12 +93,12 @@ function Assert-TkRegistryWrite {
     param([Parameter(Mandatory = $true)][string]$Path, [string]$Name = '')
     $key = ConvertTo-TkRegKey $Path
     foreach ($d in $script:RegistryDeny) {
-        if ($key -like $d) { throw "Refused: $key is security, update or licensing territory. This toolkit never writes there." }
+        if (Test-TkLike $key @($d)) { throw "Refused: $key is security, update or licensing territory. This toolkit never writes there." }
     }
     $product = (Get-TkProduct).Name
     $allow = @($script:RegistryAllow) + @(@{ Key = "HKLM\SOFTWARE\$product"; Names = @('*') }, @{ Key = "HKLM\SOFTWARE\$product\*"; Names = @('*') })
     foreach ($a in $allow) {
-        if ($key -like $a.Key) {
+        if (Test-TkLike $key @($a.Key)) {
             if (-not $Name) { return }
             if (Test-TkLike $Name $a.Names) { return }
         }

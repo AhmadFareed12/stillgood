@@ -52,6 +52,8 @@ function ConvertTo-TkReportHtml {
 
     Put '<h2>This PC</h2><dl>'
     Put "<dt>Windows</dt><dd>$(Esc $os.Caption) $(Esc $os.DisplayVersion) (build $(Esc $os.Build).$(Esc $os.Ubr))</dd>"
+    $lang = [string](Get-TkProp $os 'Language')
+    if ($lang) { Put "<dt>Installed in</dt><dd>$(Esc (Get-TkLanguageName $lang)) ($(Esc $lang)). An upgrade needs a Windows 11 image in this language.</dd>" }
     $adm = 'Yes'; if (-not $Report.Elevated) { $adm = 'No - TPM, Secure Boot and other users'' apps could not be read. Run as administrator for the full report.' }
     Put "<dt>Run as administrator</dt><dd>$(Esc $adm)</dd>"
     Put "<dt>Apps</dt><dd>$(Esc $Report.Summary.Apps) installed, $(Esc $Report.Summary.ProvisionedForNewUsers) set up for new users</dd>"

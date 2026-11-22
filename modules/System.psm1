@@ -103,6 +103,11 @@ function New-TkRealAdapters {
             }
         }
         GetLoadedHives    = { @([Microsoft.Win32.Registry]::Users.GetSubKeyNames()) }
+        GetDefaultProfile = {
+            # Where new users' profile comes from, as Windows records it (organizations can move profiles).
+            $p = Get-TkProp (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue) 'Default'
+            if ($p) { [Environment]::ExpandEnvironmentVariables([string]$p) } else { Join-Path $env:SystemDrive 'Users\Default' }
+        }
         HiveLoad          = {
             param($Mount, $File)
             Assert-TkRealSystem 'HiveLoad'
@@ -141,7 +146,8 @@ function New-TkRealAdapters {
             Assert-TkRealSystem 'RegisterTask'
             $folder = "\$((Get-TkProduct).Name)\"
             $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument ("-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" " + $Arguments)
-            $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+            # S-1-5-18 is the SYSTEM account in every Windows language (its display name is translated on some).
+            $principal = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours $Hours)
             $reg = @{ TaskName = $Name; TaskPath = $folder; Action = $action; Principal = $principal; Settings = $settings; Force = $true }
             if ($Trigger -eq 'Logon') { $reg['Trigger'] = New-ScheduledTaskTrigger -AtLogOn }

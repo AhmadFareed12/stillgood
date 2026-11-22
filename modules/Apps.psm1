@@ -104,7 +104,7 @@ function Invoke-TkUndo {
     $reinstalled = 0; $manual = New-Object System.Collections.ArrayList
     foreach ($a in $apps) {
         $cmd = [string]$a.Restore
-        if ($Reinstall -and ($cmd -like 'winget *' -or $cmd -eq 'wsreset -i')) {
+        if ($Reinstall -and ((Test-TkLike $cmd @('winget *')) -or $cmd -eq 'wsreset -i')) {
             $parts = @($cmd -split ' ' | Where-Object { $_ })
             $exe = "$($parts[0]).exe"
             $exeArgs = @(); if ($parts.Count -gt 1) { $exeArgs = @($parts[1..($parts.Count - 1)]) }

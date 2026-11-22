@@ -17,21 +17,24 @@ function Get-TkCpuSupport {
     # Unrecognised names come back as Unknown, never as a pass.
     param([string]$Name)
     $n = [string]$Name
-    if ($n -match 'Core\(TM\) Ultra|Core Ultra') { return [pscustomobject]@{ Status = 'Pass'; Generation = 'Core Ultra' } }
-    if ($n -match 'Core\(TM\)2|Core 2 ') { return [pscustomobject]@{ Status = 'Fail'; Generation = 'Core 2' } }
-    if ($n -match 'Core\(TM\) i[357] CPU') { return [pscustomobject]@{ Status = 'Fail'; Generation = 'Intel gen 1' } }   # "Core(TM) i7 CPU 920"
-    if ($n -match 'Core\(TM\) [3579] \d{3}') { return [pscustomobject]@{ Status = 'Pass'; Generation = 'Intel Core series 1 or later' } }
-    if ($n -match 'Intel.*\bi[3579]-(\d{3,5})') {
-        $d = $Matches[1]
+    $rx = { param($p) [regex]::Match($n, $p, 'IgnoreCase, CultureInvariant') }   # same result in every Windows language
+    if ((& $rx 'Core\(TM\) Ultra|Core Ultra').Success) { return [pscustomobject]@{ Status = 'Pass'; Generation = 'Core Ultra' } }
+    if ((& $rx 'Core\(TM\)2|Core 2 ').Success) { return [pscustomobject]@{ Status = 'Fail'; Generation = 'Core 2' } }
+    if ((& $rx 'Core\(TM\) i[357] CPU').Success) { return [pscustomobject]@{ Status = 'Fail'; Generation = 'Intel gen 1' } }   # "Core(TM) i7 CPU 920"
+    if ((& $rx 'Core\(TM\) [3579] \d{3}').Success) { return [pscustomobject]@{ Status = 'Pass'; Generation = 'Intel Core series 1 or later' } }
+    $m = & $rx 'Intel.*\bi[3579]-(\d{3,5})'
+    if ($m.Success) {
+        $d = $m.Groups[1].Value
         if ($d.Length -eq 3) { $gen = 1 }
         elseif ($d.Length -eq 5 -or $d.StartsWith('1')) { $gen = [int]$d.Substring(0, 2) }   # 10700 -> 10, 1165G7 -> 11
         else { $gen = [int]$d.Substring(0, 1) }
         if ($gen -ge 8) { return [pscustomobject]@{ Status = 'Pass'; Generation = "Intel gen $gen" } }
         return [pscustomobject]@{ Status = 'Fail'; Generation = "Intel gen $gen" }
     }
-    if ($n -match 'Ryzen AI') { return [pscustomobject]@{ Status = 'Pass'; Generation = 'Ryzen AI' } }
-    if ($n -match 'Ryzen\s+(?:Threadripper\s+)?(?:PRO\s+)?[3579]\s+(?:PRO\s+)?(\d)\d{3}') {
-        $series = [int]$Matches[1]
+    if ((& $rx 'Ryzen AI').Success) { return [pscustomobject]@{ Status = 'Pass'; Generation = 'Ryzen AI' } }
+    $m = & $rx 'Ryzen\s+(?:Threadripper\s+)?(?:PRO\s+)?[3579]\s+(?:PRO\s+)?(\d)\d{3}'
+    if ($m.Success) {
+        $series = [int]$m.Groups[1].Value
         if ($series -ge 3) { return [pscustomobject]@{ Status = 'Pass'; Generation = "Ryzen $($series)000" } }
         if ($series -eq 2) { return [pscustomobject]@{ Status = 'Unknown'; Generation = 'Ryzen 2000 (some models are not on the list)' } }
         return [pscustomobject]@{ Status = 'Fail'; Generation = "Ryzen $($series)000" }
@@ -116,10 +119,19 @@ function Get-TkWin11Readiness {
         [void]$checks.Add((New-TkCheck 'TPM' '2.0' "TPM $spec" $s $true 'Part of Microsoft''s hardware check.'))
     }
 
+    # Firmware and Secure Boot, read the same way in every Windows language and without admin rights:
+    # Windows sets %firmware_type% (UEFI or Legacy) and keeps the Secure Boot state in the registry.
+    # (The old way read Confirm-SecureBootUEFI's error message, which is translated on non-English Windows.)
     $sb = $null; $sbNote = 'Part of Microsoft''s hardware check.'
-    try { $sb = Confirm-SecureBootUEFI -ErrorAction Stop }
-    catch {
-        if ($_.Exception.Message -match 'not supported') { $sb = 'legacy' } else { $sb = 'unknown' }
+    $fw = [string]$env:firmware_type
+    $sbReg = Get-TkProp (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\State' -ErrorAction SilentlyContinue) 'UEFISecureBootEnabled'
+    if ($fw -eq 'Legacy') { $sb = 'legacy' }
+    elseif ($null -ne $sbReg) { $sb = ([int]$sbReg -eq 1) }
+    else {
+        try { $sb = Confirm-SecureBootUEFI -ErrorAction Stop }
+        catch [System.PlatformNotSupportedException] { $sb = 'legacy' }
+        catch { $sb = 'unknown' }
+        if ($sb -eq 'unknown' -and $fw -eq 'UEFI') { $sb = $false }   # UEFI without a readable state: Secure Boot capable, state unknown
     }
     if ($sb -eq $true) { [void]$checks.Add((New-TkCheck 'UEFI and Secure Boot' 'UEFI, Secure Boot capable' 'UEFI, Secure Boot on' 'Pass' $true $sbNote)) }
     elseif ($sb -eq $false) { [void]$checks.Add((New-TkCheck 'UEFI and Secure Boot' 'UEFI, Secure Boot capable' 'UEFI, Secure Boot off' 'Pass' $true 'Secure Boot capable; turning it on is recommended.')) }

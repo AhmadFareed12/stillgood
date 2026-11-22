@@ -3,7 +3,7 @@
 #   - Windows Sandbox (as SYSTEM):  lab\Invoke-SandboxTest.ps1 -ToolPath <this toolkit> -TestScript tests\Integration-Test.ps1
 #   - a lab VM marked C:\Lab.marker (as its signed-in admin):  lab\Invoke-LabTest.ps1 -Vm <vm> -ToolPath ... -TestScript ...
 # Anywhere else it refuses.
-param([Parameter(Mandatory = $true)][string]$ResultsDir)
+param([Parameter(Mandatory = $true)][string]$ResultsDir, [string]$Culture = '')
 $ErrorActionPreference = 'Continue'
 $steps = New-Object System.Collections.ArrayList
 
@@ -27,6 +27,15 @@ $userName = 'lab'; if ($inSandbox) { $userName = 'WDAGUtilityAccount' }
 Start-Transcript -LiteralPath (Join-Path $ResultsDir 'transcript.txt') | Out-Null
 
 $ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$setCulture = ''
+if ($Culture) {
+    # Every StillGood run below starts with this region format (dates, numbers, text comparison), set inside its own
+    # process, the way it would run on a PC set up for that country. (Set-Culture for SYSTEM only reaches new
+    # sign-ins on a full Windows, so it is not relied on.)
+    $setCulture = "[System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('$Culture'); "
+    $seen = (& $ps -NoProfile -Command ($setCulture + '[System.Globalization.CultureInfo]::CurrentCulture.Name + '' '' + (Get-Date -Format yyyy)') | Out-String).Trim()
+    Step 'region format' ($seen -like "$Culture *") "StillGood runs with: $seen (culture and its calendar year)"
+}
 $work = 'C:\Work\toolkit'
 New-Item -ItemType Directory -Path 'C:\Work' -Force | Out-Null
 Copy-Item -LiteralPath (Split-Path -Parent $PSScriptRoot) -Destination $work -Recurse -Force
@@ -35,7 +44,11 @@ $runs = 'C:\ProgramData\StillGood\runs'
 
 function Invoke-Tk {
     param([string[]]$TkArgs, [string]$Log)
-    $out = & $ps -NoProfile -ExecutionPolicy Bypass -File $tk @TkArgs 2>&1 | Out-String
+    if ($setCulture) {
+        $out = & $ps -NoProfile -ExecutionPolicy Bypass -Command ($setCulture + "& '$tk' $($TkArgs -join ' '); exit `$LASTEXITCODE") 2>&1 | Out-String
+    } else {
+        $out = & $ps -NoProfile -ExecutionPolicy Bypass -File $tk @TkArgs 2>&1 | Out-String
+    }
     $code = $LASTEXITCODE
     Set-Content -LiteralPath (Join-Path $ResultsDir $Log) -Value $out -Encoding UTF8
     return [pscustomobject]@{ Code = $code; Out = $out }
@@ -99,6 +112,8 @@ try {
     Copy-Item -LiteralPath (Join-Path $rep.FullName 'report.json') -Destination $ResultsDir
     $plan = (Get-Content -LiteralPath (Join-Path $rep.FullName 'report.json') -Raw | ConvertFrom-Json).Plan
     $c = $plan.Counts
+    $greg = (Get-Date).ToString('yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
+    Step 'file stamps use the Gregorian calendar' ($rep.Name.StartsWith($greg)) "run folder: $($rep.Name)"
     Step 'report (kiosk)' ($r.Code -eq 0) ("exit {0}; plan: {1} to remove, {2} to block, {3} kept, {4} unknown, {5} protected" -f $r.Code, $c.Remove, $c.Block, $c.Keep, $c.Unknown, $c.Protected)
 } catch { Step 'report (kiosk)' $false $_.Exception.Message }
 if (-not $plan) { Finish }
